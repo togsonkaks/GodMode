@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Episode {{ episode_id }}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+      table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
+      th, td { border: 1px solid #ddd; padding: 8px; font-size: 12px; }
+      th { background: #f6f6f6; text-align: left; position: sticky; top: 0; }
+      a { color: #0b57d0; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .muted { color: #666; }
+      code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <p><a href="/sessions/{{ date }}/{{ ticker }}/{{ session_id }}">← session</a></p>
+    <h2>Episode</h2>
+    <p class="muted">
+      <code>{{ date }}</code> <code>{{ ticker }}</code> <code>{{ session_id }}</code>
+    </p>
+
+    <div class="card">
+      <pre style="white-space: pre-wrap; font-size: 12px;">{{ episode }}</pre>
+    </div>
+
+    <h3>TF Indicators</h3>
+    {% if tf_rows|length == 0 %}
+      <p>No tf_indicators rows for this episode.</p>
+    {% else %}
+      <table>
+        <thead>
+          <tr>
+            <th>timestamp</th><th>timeframe</th><th>ema9</th><th>ema20</th><th>ema30</th><th>ema200</th>
+            <th>compression_index</th><th>ema_confluence_score</th><th>stack_state</th><th>price_vs_emas</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in tf_rows %}
+            <tr>
+              <td>{{ r.timestamp }}</td>
+              <td>{{ r.timeframe }}</td>
+              <td>{{ r.ema9 }}</td>
+              <td>{{ r.ema20 }}</td>
+              <td>{{ r.ema30 }}</td>
+              <td>{{ r.ema200 }}</td>
+              <td>{{ r.compression_index }}</td>
+              <td>{{ r.ema_confluence_score }}</td>
+              <td>{{ r.stack_state }}</td>
+              <td>{{ r.price_vs_emas }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <h3>Snapshots (first 200 rows)</h3>
+    {% if snapshots|length == 0 %}
+      <p>No snapshots found for this episode.</p>
+    {% else %}
+      <table>
+        <thead>
+          <tr>
+            <th>timestamp</th><th>phase</th><th>last_price</th><th>delta</th><th>cvd_60s</th><th>divergence_flag</th><th>div_score</th>
+            <th>large_trade_share_of_total_vol_10s</th><th>signed_distance_to_level_atr</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in snapshots[:200] %}
+            <tr>
+              <td>{{ s.timestamp }}</td>
+              <td>{{ s.phase }}</td>
+              <td>{{ s.last_price }}</td>
+              <td>{{ s.delta }}</td>
+              <td>{{ s.cvd_60s }}</td>
+              <td>{{ s.divergence_flag }}</td>
+              <td>{{ s.div_score }}</td>
+              <td>{{ s.large_trade_share_of_total_vol_10s }}</td>
+              <td>{{ s.signed_distance_to_level_atr }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </body>
+</html>
+
+

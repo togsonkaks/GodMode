@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GodMode — Jobs</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79b8ff;
+            --success: #3fb950;
+            --warning: #d29922;
+            --error: #f85149;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container { max-width: 1100px; margin: 0 auto; }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--accent);
+            font-weight: 500;
+        }
+        .nav {
+            display: flex;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .nav a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        .nav a:hover { color: var(--accent); }
+        .status-bar {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .status-bar .info {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        .status-bar .refresh {
+            color: var(--accent);
+            font-size: 0.8rem;
+        }
+        .job-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .job-header .ticker {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        .badge.pending { background: rgba(210, 153, 34, 0.2); color: var(--warning); }
+        .badge.running { background: rgba(88, 166, 255, 0.2); color: var(--accent); animation: pulse 1.5s infinite; }
+        .badge.done { background: rgba(63, 185, 80, 0.2); color: var(--success); }
+        .badge.error { background: rgba(248, 81, 73, 0.2); color: var(--error); }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        .job-meta {
+            display: flex;
+            gap: 2rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+        }
+        .job-meta span { display: flex; align-items: center; gap: 0.3rem; }
+        .job-progress {
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+            padding: 0.75rem 1rem;
+            font-size: 0.85rem;
+            margin-bottom: 0.75rem;
+        }
+        .job-progress .step {
+            color: var(--accent);
+            margin-bottom: 0.25rem;
+        }
+        .job-progress .stats {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+        .job-progress .price-preview {
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border);
+            color: var(--success);
+        }
+        .job-actions {
+            display: flex;
+            gap: 1rem;
+        }
+        .session-link {
+            color: var(--accent);
+            text-decoration: none;
+            font-size: 0.85rem;
+        }
+        .session-link:hover { text-decoration: underline; }
+        .error-msg {
+            color: var(--error);
+            font-size: 0.8rem;
+            background: rgba(248, 81, 73, 0.1);
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            max-height: 100px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .empty {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+            background: var(--surface);
+            border-radius: 8px;
+        }
+        .empty a { color: var(--accent); text-decoration: none; }
+        .empty a:hover { text-decoration: underline; }
+        .time { color: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="/">← Sessions</a>
+            <a href="/record">+ New Record</a>
+        </div>
+        
+        <h1>Jobs</h1>
+        
+        <div class="status-bar">
+            <span class="info" id="status-info">Loading...</span>
+            <span class="refresh" id="refresh-status">Auto-refresh: ON</span>
+        </div>
+
+        <div id="jobs-container">
+            <!-- Jobs will be rendered here -->
+        </div>
+    </div>
+
+    <script>
+        const POLL_INTERVAL = 1500;
+        let pollTimer = null;
+
+        function formatTime(ms) {
+            if (!ms) return '-';
+            const d = new Date(ms);
+            return d.toLocaleTimeString();
+        }
+
+        function formatDuration(startMs, endMs) {
+            if (!startMs) return '-';
+            const end = endMs || Date.now();
+            const sec = Math.round((end - startMs) / 1000);
+            if (sec < 60) return sec + 's';
+            return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+        }
+
+        function formatNumber(n) {
+            if (!n) return '0';
+            return n.toLocaleString();
+        }
+
+        function formatPrice(p) {
+            if (p === null || p === undefined) return '-';
+            return '$' + p.toFixed(2);
+        }
+
+        function getSessionLink(job) {
+            if (job.status !== 'done') return '';
+            const startDate = new Date(job.start_ms);
+            const dateStr = startDate.toISOString().split('T')[0];
+            return `/sessions/${dateStr}/${job.ticker}/${job.session_id}`;
+        }
+
+        function renderJob(job) {
+            const progressHtml = job.status === 'running' || job.status === 'done' ? `
+                <div class="job-progress">
+                    <div class="step">${job.current_step || 'Starting...'}</div>
+                    <div class="stats">
+                        Trades: ${formatNumber(job.trade_count)} · Quotes: ${formatNumber(job.quote_count)}
+                        ${job.marker_count ? ` · Markers: ${job.marker_count}` : ''}
+                    </div>
+                    ${(job.first_price || job.last_price) ? `
+                        <div class="price-preview">
+                            First: ${formatPrice(job.first_price)} → Last: ${formatPrice(job.last_price)}
+                        </div>
+                    ` : ''}
+                </div>
+            ` : '';
+
+            const actionsHtml = job.status === 'done' 
+                ? `<a href="${getSessionLink(job)}" class="session-link">View Results →</a>`
+                : job.status === 'error'
+                    ? `<div class="error-msg">${(job.error_message || '').substring(0, 300)}</div>`
+                    : '';
+
+            return `
+                <div class="job-card" data-job-id="${job.job_id}">
+                    <div class="job-header">
+                        <span class="ticker">${job.ticker}</span>
+                        <span class="badge ${job.status}">${job.status}</span>
+                    </div>
+                    <div class="job-meta">
+                        <span>Session: ${job.session_id}</span>
+                        <span>Started: ${formatTime(job.started_at)}</span>
+                        <span>Duration: ${formatDuration(job.started_at, job.finished_at)}</span>
+                    </div>
+                    ${progressHtml}
+                    <div class="job-actions">
+                        ${actionsHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        async function refreshJobs() {
+            try {
+                const resp = await fetch('/api/jobs');
+                const jobs = await resp.json();
+
+                const container = document.getElementById('jobs-container');
+                const statusInfo = document.getElementById('status-info');
+
+                if (jobs.length === 0) {
+                    container.innerHTML = '<div class="empty">No jobs yet. <a href="/record">Start a recording →</a></div>';
+                    statusInfo.textContent = 'No jobs';
+                    return;
+                }
+
+                const pending = jobs.filter(j => j.status === 'pending' || j.status === 'running').length;
+                const done = jobs.filter(j => j.status === 'done').length;
+                const errors = jobs.filter(j => j.status === 'error').length;
+
+                statusInfo.textContent = `${pending} running · ${done} done · ${errors} errors`;
+
+                container.innerHTML = jobs.map(renderJob).join('');
+
+                // Stop polling if all jobs are terminal
+                if (pending === 0 && jobs.length > 0) {
+                    document.getElementById('refresh-status').textContent = 'Auto-refresh: OFF (all done)';
+                    if (pollTimer) {
+                        clearInterval(pollTimer);
+                        pollTimer = null;
+                    }
+                }
+            } catch (e) {
+                console.error('Poll error:', e);
+            }
+        }
+
+        // Initial refresh
+        refreshJobs();
+
+        // Start polling
+        pollTimer = setInterval(refreshJobs, POLL_INTERVAL);
+    </script>
+</body>
+</html>

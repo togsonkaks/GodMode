@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GodMode — Record</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79b8ff;
+            --success: #3fb950;
+            --error: #f85149;
+            --warning: #d29922;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container { max-width: 700px; margin: 0 auto; }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--accent);
+            font-weight: 500;
+        }
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        input, select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.95rem;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+        }
+        input::placeholder { color: var(--text-muted); }
+        .row {
+            display: flex;
+            gap: 1rem;
+        }
+        .row > .form-group { flex: 1; }
+        .row-3 > .form-group { flex: 1; }
+        .hint {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+        .section-title {
+            font-size: 0.9rem;
+            color: var(--text);
+            margin: 2rem 0 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .add-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            width: auto;
+            margin: 0;
+        }
+        .add-btn:hover { background: var(--surface); }
+        button.submit-btn {
+            width: 100%;
+            padding: 1rem;
+            margin-top: 1.5rem;
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        button.submit-btn:hover { background: var(--accent-hover); }
+        button.submit-btn:active { transform: translateY(1px); }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 1.5rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.85rem;
+        }
+        .back-link:hover { color: var(--accent); }
+        .marker-block {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .marker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .marker-label {
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .marker-times {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .marker-times .form-group { flex: 1; }
+        .remove-marker {
+            background: transparent;
+            border: 1px solid var(--error);
+            color: var(--error);
+            padding: 0.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            width: auto;
+            margin: 0;
+        }
+        .remove-marker:hover { background: rgba(248, 81, 73, 0.1); }
+        .type-checkboxes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem 1rem;
+            padding: 0.5rem;
+            background: var(--bg);
+            border-radius: 4px;
+        }
+        .type-checkboxes label.cb {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.8rem;
+            color: var(--text);
+            cursor: pointer;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+        .type-checkboxes input[type="checkbox"] {
+            width: auto;
+            accent-color: var(--accent);
+        }
+        .price-tags {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--border);
+        }
+        .price-tag-row {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+            align-items: center;
+        }
+        .price-tag-row input {
+            flex: 1;
+        }
+        .price-tag-row select {
+            width: 180px;
+        }
+        .small-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            padding: 0.35rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+        }
+        .small-btn:hover { background: var(--surface); }
+        .tz-note {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1.5rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        .tz-note strong { color: var(--warning); }
+        
+        /* Chart styles */
+        .chart-section {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .chart-title {
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .chart-controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .tf-btn {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 0.35rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .tf-btn:hover { border-color: var(--accent); color: var(--text); }
+        .tf-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+        .load-chart-btn {
+            background: var(--accent);
+            border: none;
+            color: var(--bg);
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 600;
+        }
+        .load-chart-btn:hover { background: var(--accent-hover); }
+        #chart-container {
+            width: 100%;
+            height: 350px;
+            background: var(--bg);
+            border-radius: 6px;
+            position: relative;
+        }
+        .chart-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        .click-info {
+            margin-top: 0.75rem;
+            padding: 0.75rem;
+            background: var(--bg);
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .click-info strong { color: var(--warning); }
+        .set-btn {
+            background: transparent;
+            border: 1px solid var(--success);
+            color: var(--success);
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            margin-left: 0.5rem;
+        }
+        .set-btn:hover { background: rgba(63, 185, 80, 0.1); }
+        .crosshair-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(22, 27, 34, 0.9);
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: var(--text);
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Back to Sessions</a>
+        <h1>Record Market Data</h1>
+        
+        <div class="tz-note">
+            <strong>Timezone:</strong> Times you enter will be converted to UTC using the selected timezone below.
+        </div>
+        
+        <form method="POST" action="/record" id="recordForm">
+            <div class="form-group">
+                <label for="tickers">Tickers</label>
+                <input type="text" id="tickers" name="tickers" placeholder="TSLA, NVDA, AAPL" required>
+                <div class="hint">Comma-separated. Data will be fetched for each ticker.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="timezone">Timezone</label>
+                <select id="timezone" name="timezone">
+                    <option value="America/Chicago" selected>Central (America/Chicago)</option>
+                    <option value="America/New_York">Eastern (America/New_York)</option>
+                    <option value="America/Los_Angeles">Pacific (America/Los_Angeles)</option>
+                    <option value="America/Denver">Mountain (America/Denver)</option>
+                    <option value="UTC">UTC</option>
+                </select>
+            </div>
+
+            <div class="row">
+                <div class="form-group">
+                    <label for="start">Session Start Time (optional)</label>
+                    <input type="datetime-local" id="start" name="start" step="1">
+                    <div class="hint">If blank, uses your earliest Level Start time exactly.</div>
+                </div>
+                <div class="form-group">
+                    <label for="end">Session End Time (optional)</label>
+                    <input type="datetime-local" id="end" name="end" step="1">
+                    <div class="hint">If blank, uses your latest Level End time exactly.</div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="direction_bias">Direction Bias</label>
+                <select id="direction_bias" name="direction_bias">
+                    <option value="long">Long</option>
+                    <option value="short">Short</option>
+                </select>
+            </div>
+
+            <div class="section-title">
+                <span>Support / Resistance Levels (Per-Level Watch)</span>
+                <button type="button" class="add-btn" onclick="addLevel()">+ Add Level</button>
+            </div>
+            <div class="hint" style="margin-bottom: 1rem;">
+                Each level is its own watch window: <code>Start</code> = when you start watching that level, <code>End</code> = when the decisive move begins.
+                The <b>Move</b> between levels is computed automatically as the time gap <code>Level i End → Level i+1 Start</code>.
+            </div>
+
+            <!-- Interactive Chart Section -->
+            <div class="chart-section">
+                <div class="chart-header">
+                    <span class="chart-title">📈 Click to Set Time, Right-Click to Set Price</span>
+                    <div class="chart-controls">
+                        <button type="button" class="tf-btn" data-tf="30s">30s</button>
+                        <button type="button" class="tf-btn active" data-tf="1m">1m</button>
+                        <button type="button" class="tf-btn" data-tf="2m">2m</button>
+                        <button type="button" class="tf-btn" data-tf="3m">3m</button>
+                        <button type="button" class="load-chart-btn" onclick="loadChart()">Load Chart</button>
+                    </div>
+                </div>
+                <div id="chart-container">
+                    <div class="chart-placeholder">Enter ticker above, then click "Load Chart"</div>
+                </div>
+                <div class="click-info" id="click-info" style="display:none;">
+                    <strong>Click:</strong> <span id="click-time">—</span> @ <span id="click-price">—</span>
+                    <button type="button" class="set-btn" onclick="setFromClick('start')">→ Level 1 Start</button>
+                    <button type="button" class="set-btn" onclick="setFromClick('end')">→ Level 1 End</button>
+                </div>
+                <div class="click-info" id="rightclick-info" style="display:none;">
+                    <strong>Right-Click (Price Line):</strong> <span id="rightclick-price">—</span>
+                    <button type="button" class="set-btn" onclick="setRightClickPrice()">→ Set as Level 1 Price</button>
+                </div>
+                <div class="hint" style="margin-top:0.5rem;">
+                    <b>Left-click</b> = set time | <b>Right-click</b> = set price line
+                </div>
+            </div>
+
+            <input type="hidden" id="levels_chain_id" name="levels_chain_id" value="">
+
+            <div id="levels-container">
+                <!-- Levels will be added here dynamically -->
+            </div>
+
+            <button type="submit" class="submit-btn">Fetch & Analyze</button>
+        </form>
+    </div>
+
+    <script>
+        let levelCount = 0;
+
+        function getTodayDatetime() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}T09:30`;
+        }
+
+        function getTodayEndDatetime() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}T16:00`;
+        }
+
+        function makeChainId() {
+            // Stable-ish per page load; used to group level entries in notes for future-proofing.
+            const now = new Date();
+            return `levels_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${now.getHours()}${now.getMinutes()}${now.getSeconds()}`;
+        }
+
+        // Leave session start/end blank by default; we can auto-derive from levels on submit.
+        document.getElementById('start').value = "";
+        document.getElementById('end').value = "";
+        document.getElementById('levels_chain_id').value = makeChainId();
+
+        function addLevel() {
+            levelCount++;
+            const n = levelCount;
+            const container = document.getElementById('levels-container');
+            const div = document.createElement('div');
+            div.className = 'marker-block';
+            div.id = `level-row-${n}`;
+            div.innerHTML = `
+                <div class="marker-header">
+                    <span class="marker-label">Level ${n}</span>
+                    <button type="button" class="remove-marker" onclick="removeLevel(${n})">✕ Remove</button>
+                </div>
+                
+                <!-- Level Type Toggle -->
+                <div class="form-group">
+                    <label>Level Type</label>
+                    <div class="level-type-toggle" style="display:flex;gap:1.5rem;margin-bottom:0.5rem;">
+                        <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
+                            <input type="radio" name="level_type_${n}" value="price" checked onchange="toggleLevelType(${n})">
+                            <span>Fixed Price</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
+                            <input type="radio" name="level_type_${n}" value="indicator" onchange="toggleLevelType(${n})">
+                            <span>Indicator (VWAP/EMA)</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- Price Mode (default) -->
+                <div class="form-group level-price-mode" id="price-mode-${n}">
+                    <label>Support/Resistance Price</label>
+                    <div class="row">
+                        <div class="form-group">
+                            <input type="number" step="any" inputmode="decimal" placeholder="Price (e.g. 0.4336)" name="level_price_${n}" id="level_price_${n}">
+                            <div class="hint">High precision supported (step=any).</div>
+                        </div>
+                        <div class="form-group">
+                            <select name="level_kind_${n}">
+                                <option value="support">support</option>
+                                <option value="resistance">resistance</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Indicator Mode (hidden by default) -->
+                <div class="form-group level-indicator-mode" id="indicator-mode-${n}" style="display:none;">
+                    <label>Select Indicators to Analyze</label>
+                    <div class="indicator-checkboxes" style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:0.5rem;">
+                        <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer;background:var(--bg-light);padding:0.4rem 0.8rem;border-radius:4px;">
+                            <input type="checkbox" name="level_ind_vwap_${n}" value="1">
+                            <span>VWAP</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer;background:var(--bg-light);padding:0.4rem 0.8rem;border-radius:4px;">
+                            <input type="checkbox" name="level_ind_ema9_${n}" value="1">
+                            <span>EMA 9</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer;background:var(--bg-light);padding:0.4rem 0.8rem;border-radius:4px;">
+                            <input type="checkbox" name="level_ind_ema20_${n}" value="1">
+                            <span>EMA 20</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer;background:var(--bg-light);padding:0.4rem 0.8rem;border-radius:4px;">
+                            <input type="checkbox" name="level_ind_ema30_${n}" value="1">
+                            <span>EMA 30</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer;background:var(--bg-light);padding:0.4rem 0.8rem;border-radius:4px;">
+                            <input type="checkbox" name="level_ind_ema200_${n}" value="1">
+                            <span>EMA 200</span>
+                        </label>
+                    </div>
+                    <div class="hint" style="margin-top:0.5rem;">Each selected indicator will be analyzed as a dynamic support/resistance level (±1% band).</div>
+                    <div class="hint" style="margin-top:0.3rem;color:var(--accent);">Using chart timeframe: <strong id="indicator-tf-display-${n}">1m</strong></div>
+                    <input type="hidden" name="level_kind_${n}" value="support">
+                    <input type="hidden" name="indicator_timeframe_${n}" id="indicator_timeframe_${n}" value="1m">
+                </div>
+                <div class="marker-times">
+                    <div class="form-group">
+                        <label>Start Time</label>
+                        <input type="datetime-local" name="level_start_${n}" id="level_start_${n}" step="1" value="" onblur="fetchCandle(${n}, 'start')">
+                        <div class="hint">When you started watching this level closely</div>
+                        <div class="candle-info" id="candle_start_${n}" style="margin-top:0.5rem;font-size:0.8rem;color:var(--success);"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>End Time</label>
+                        <input type="datetime-local" name="level_end_${n}" id="level_end_${n}" step="1" value="" onblur="fetchCandle(${n}, 'end')">
+                        <div class="hint">When the decisive move began (this is the anchor <code>T</code>)</div>
+                        <div class="candle-info" id="candle_end_${n}" style="margin-top:0.5rem;font-size:0.8rem;color:var(--success);"></div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Outcome (optional)</label>
+                    <select name="level_outcome_${n}">
+                        <option value="">— pending —</option>
+                        <option value="win">win (held / bounced)</option>
+                        <option value="loss">loss (broke)</option>
+                    </select>
+                    <div class="hint">Used for later win/loss comparisons across levels.</div>
+                </div>
+            `;
+            container.appendChild(div);
+        }
+        
+        async function fetchCandle(levelNum, which) {
+            const ticker = document.getElementById('tickers').value.split(',')[0].trim();
+            const tz = document.getElementById('timezone').value;
+            const timeInput = document.getElementById(`level_${which}_${levelNum}`);
+            const infoDiv = document.getElementById(`candle_${which}_${levelNum}`);
+            const priceInput = document.getElementById(`level_price_${levelNum}`);
+            
+            if (!ticker || !timeInput.value) {
+                infoDiv.textContent = '';
+                return;
+            }
+            
+            infoDiv.textContent = 'Loading...';
+            infoDiv.style.color = 'var(--text-muted)';
+            
+            try {
+                // For "end" fields, the timestamp has +1 candle duration added
+                // Subtract it back to get the actual candle that was clicked
+                let lookupTimestamp = timeInput.value;
+                if (which === 'end') {
+                    const tfSeconds = {
+                        '30s': 30,
+                        '1m': 60,
+                        '2m': 120,
+                        '3m': 180
+                    };
+                    const duration = tfSeconds[currentTimeframe] || 60;
+                    // Parse the datetime-local value and subtract duration
+                    // timeInput.value is like "2025-12-26T10:51:00" (local time)
+                    const parts = timeInput.value.split('T');
+                    if (parts.length === 2) {
+                        const datePart = parts[0];
+                        const timeParts = parts[1].split(':');
+                        let hours = parseInt(timeParts[0], 10);
+                        let mins = parseInt(timeParts[1], 10);
+                        let secs = parseInt(timeParts[2] || '0', 10);
+                        
+                        // Subtract duration in seconds
+                        secs -= duration;
+                        while (secs < 0) { secs += 60; mins--; }
+                        while (mins < 0) { mins += 60; hours--; }
+                        while (hours < 0) { hours += 24; }
+                        
+                        lookupTimestamp = `${datePart}T${String(hours).padStart(2,'0')}:${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+                    }
+                }
+                
+                const resp = await fetch(`/api/candle?ticker=${encodeURIComponent(ticker)}&timestamp=${encodeURIComponent(lookupTimestamp)}&timezone=${encodeURIComponent(tz)}`);
+                const data = await resp.json();
+                
+                if (data.error) {
+                    infoDiv.textContent = data.error;
+                    infoDiv.style.color = 'var(--error)';
+                } else {
+                    infoDiv.innerHTML = `<b>Close:</b> ${data.close} | <b>H:</b> ${data.high} | <b>L:</b> ${data.low} | <b>Vol:</b> ${data.volume?.toLocaleString() || 'N/A'}`;
+                    infoDiv.style.color = 'var(--success)';
+                    
+                    // If price field is empty, auto-fill with close price
+                    if (!priceInput.value) {
+                        priceInput.value = data.close;
+                        priceInput.style.borderColor = 'var(--success)';
+                        setTimeout(() => { priceInput.style.borderColor = ''; }, 2000);
+                    }
+                }
+            } catch (e) {
+                infoDiv.textContent = 'Error fetching candle';
+                infoDiv.style.color = 'var(--error)';
+            }
+        }
+
+        function removeLevel(id) {
+            const row = document.getElementById(`level-row-${id}`);
+            if (row) row.remove();
+        }
+        
+        function toggleLevelType(levelNum) {
+            const radios = document.querySelectorAll(`input[name="level_type_${levelNum}"]`);
+            let selectedType = 'price';
+            for (const r of radios) {
+                if (r.checked) {
+                    selectedType = r.value;
+                    break;
+                }
+            }
+            
+            const priceMode = document.getElementById(`price-mode-${levelNum}`);
+            const indicatorMode = document.getElementById(`indicator-mode-${levelNum}`);
+            
+            if (selectedType === 'price') {
+                priceMode.style.display = 'block';
+                indicatorMode.style.display = 'none';
+            } else {
+                priceMode.style.display = 'none';
+                indicatorMode.style.display = 'block';
+            }
+        }
+
+        // Start with 2 blank levels (common case: fail then win at next support)
+        addLevel();
+        addLevel();
+        
+        // ========== CHART FUNCTIONALITY ==========
+        let chart = null;
+        let candleSeries = null;
+        let chartData = [];
+        let lastClickTime = null;
+        let lastClickPrice = null;
+        let lastRightClickPrice = null;
+        let priceLine = null;
+        let currentTimeframe = '1m';
+        
+        // Timeframe button handlers
+        document.querySelectorAll('.tf-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                currentTimeframe = this.dataset.tf;
+                
+                // Update all indicator timeframe hidden fields
+                document.querySelectorAll('[id^="indicator_timeframe_"]').forEach(input => {
+                    input.value = currentTimeframe;
+                });
+                // Update display labels
+                document.querySelectorAll('[id^="indicator-tf-display-"]').forEach(span => {
+                    span.textContent = currentTimeframe;
+                });
+                
+                if (chartData.length > 0) {
+                    loadChart(); // Reload with new timeframe
+                }
+            });
+        });
+        
+        async function loadChart() {
+            const ticker = document.getElementById('tickers').value.split(',')[0].trim();
+            const tz = document.getElementById('timezone').value;
+            
+            if (!ticker) {
+                alert('Please enter a ticker first');
+                return;
+            }
+            
+            const container = document.getElementById('chart-container');
+            container.innerHTML = '<div class="chart-placeholder">Loading chart...</div>';
+            
+            try {
+                // Fetch candles from API
+                const resp = await fetch(`/api/chart_candles?ticker=${encodeURIComponent(ticker)}&timeframe=${currentTimeframe}&timezone=${encodeURIComponent(tz)}`);
+                const data = await resp.json();
+                
+                if (data.error) {
+                    container.innerHTML = `<div class="chart-placeholder" style="color:var(--error);">${data.error}</div>`;
+                    return;
+                }
+                
+                if (!data.candles || data.candles.length === 0) {
+                    container.innerHTML = '<div class="chart-placeholder">No candle data available</div>';
+                    return;
+                }
+                
+                chartData = data.candles;
+                
+                // Clear and create chart
+                container.innerHTML = '';
+                // Get timezone for display formatting
+                const selectedTz = document.getElementById('timezone').value;
+                
+                chart = LightweightCharts.createChart(container, {
+                    width: container.clientWidth,
+                    height: 350,
+                    layout: {
+                        background: { color: '#0d1117' },
+                        textColor: '#c9d1d9',
+                    },
+                    grid: {
+                        vertLines: { color: '#21262d' },
+                        horzLines: { color: '#21262d' },
+                    },
+                    crosshair: {
+                        mode: LightweightCharts.CrosshairMode.Normal,
+                    },
+                    timeScale: {
+                        timeVisible: true,
+                        secondsVisible: currentTimeframe === '30s',
+                        borderColor: '#30363d',
+                    },
+                    rightPriceScale: {
+                        borderColor: '#30363d',
+                    },
+                    localization: {
+                        timeFormatter: (timestamp) => {
+                            const date = new Date(timestamp * 1000);
+                            return date.toLocaleTimeString('en-US', { 
+                                timeZone: selectedTz,
+                                hour: '2-digit', 
+                                minute: '2-digit',
+                                hour12: false 
+                            });
+                        },
+                    },
+                });
+                
+                candleSeries = chart.addCandlestickSeries({
+                    upColor: '#3fb950',
+                    downColor: '#f85149',
+                    borderUpColor: '#3fb950',
+                    borderDownColor: '#f85149',
+                    wickUpColor: '#3fb950',
+                    wickDownColor: '#f85149',
+                });
+                
+                candleSeries.setData(chartData);
+                chart.timeScale().fitContent();
+                
+                // Left-click handler (for time)
+                chart.subscribeClick(param => {
+                    if (param.time && param.point) {
+                        const price = candleSeries.coordinateToPrice(param.point.y);
+                        if (price !== null) {
+                            lastClickTime = param.time;
+                            lastClickPrice = price.toFixed(4);
+                            
+                            // Format time for display
+                            const date = new Date(param.time * 1000);
+                            const timeStr = date.toLocaleString('en-US', { 
+                                timeZone: tz,
+                                month: 'short', day: 'numeric',
+                                hour: '2-digit', minute: '2-digit', second: '2-digit'
+                            });
+                            
+                            document.getElementById('click-time').textContent = timeStr;
+                            document.getElementById('click-price').textContent = '$' + lastClickPrice;
+                            document.getElementById('click-info').style.display = 'block';
+                        }
+                    }
+                });
+                
+                // Right-click handler (for price line)
+                container.addEventListener('contextmenu', function(e) {
+                    e.preventDefault();
+                    if (!chart || !candleSeries) return;
+                    
+                    const rect = container.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const price = candleSeries.coordinateToPrice(y);
+                    
+                    if (price !== null) {
+                        lastRightClickPrice = price.toFixed(4);
+                        document.getElementById('rightclick-price').textContent = '$' + lastRightClickPrice;
+                        document.getElementById('rightclick-info').style.display = 'block';
+                        
+                        // Draw horizontal line on chart
+                        if (priceLine) {
+                            candleSeries.removePriceLine(priceLine);
+                        }
+                        priceLine = candleSeries.createPriceLine({
+                            price: parseFloat(lastRightClickPrice),
+                            color: '#d29922',
+                            lineWidth: 2,
+                            lineStyle: LightweightCharts.LineStyle.Dashed,
+                            axisLabelVisible: true,
+                            title: 'Support/Resistance',
+                        });
+                    }
+                });
+                
+                // Resize handler
+                window.addEventListener('resize', () => {
+                    if (chart) {
+                        chart.applyOptions({ width: container.clientWidth });
+                    }
+                });
+                
+            } catch (e) {
+                container.innerHTML = `<div class="chart-placeholder" style="color:var(--error);">Error: ${e.message}</div>`;
+            }
+        }
+        
+        function setRightClickPrice() {
+            if (!lastRightClickPrice) {
+                alert('Right-click on the chart first to set a price line');
+                return;
+            }
+            
+            const priceInput = document.getElementById('level_price_1');
+            if (priceInput) {
+                priceInput.value = lastRightClickPrice;
+                priceInput.style.borderColor = 'var(--success)';
+                setTimeout(() => priceInput.style.borderColor = '', 2000);
+            }
+        }
+        
+        function setFromClick(target) {
+            if (!lastClickTime || !lastClickPrice) {
+                alert('Click on the chart first');
+                return;
+            }
+            
+            const tz = document.getElementById('timezone').value;
+            
+            // Chart now shows candle END time (like Webull)
+            // lastClickTime is the END time of the clicked candle
+            // For "start": subtract duration to get candle START time
+            // For "end": use as-is (already END time)
+            const tfSeconds = {
+                '30s': 30,
+                '1m': 60,
+                '2m': 120,
+                '3m': 180
+            };
+            let clickTime = lastClickTime;
+            if (target === 'start') {
+                // Subtract candle duration to get START time
+                clickTime = lastClickTime - (tfSeconds[currentTimeframe] || 60);
+            }
+            // For 'end', use as-is (already END time from chart)
+            
+            const date = new Date(clickTime * 1000);
+            
+            // Format for datetime-local input (YYYY-MM-DDTHH:MM:SS)
+            // We need to convert to the user's timezone
+            const localDate = new Date(date.toLocaleString('en-US', { timeZone: tz }));
+            const year = localDate.getFullYear();
+            const month = String(localDate.getMonth() + 1).padStart(2, '0');
+            const day = String(localDate.getDate()).padStart(2, '0');
+            const hours = String(localDate.getHours()).padStart(2, '0');
+            const mins = String(localDate.getMinutes()).padStart(2, '0');
+            const secs = String(localDate.getSeconds()).padStart(2, '0');
+            const dtValue = `${year}-${month}-${day}T${hours}:${mins}:${secs}`;
+            
+            if (target === 'start') {
+                // Set first level's start time
+                const startInput = document.getElementById('level_start_1');
+                if (startInput) {
+                    startInput.value = dtValue;
+                    startInput.style.borderColor = 'var(--success)';
+                    setTimeout(() => startInput.style.borderColor = '', 2000);
+                    fetchCandle(1, 'start');
+                }
+            } else if (target === 'end') {
+                // Set first level's end time
+                const endInput = document.getElementById('level_end_1');
+                if (endInput) {
+                    endInput.value = dtValue;
+                    endInput.style.borderColor = 'var(--success)';
+                    setTimeout(() => endInput.style.borderColor = '', 2000);
+                    fetchCandle(1, 'end');
+                }
+            } else if (target === 'price') {
+                // Set first level's price
+                const priceInput = document.getElementById('level_price_1');
+                if (priceInput) {
+                    priceInput.value = lastClickPrice;
+                    priceInput.style.borderColor = 'var(--success)';
+                    setTimeout(() => priceInput.style.borderColor = '', 2000);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

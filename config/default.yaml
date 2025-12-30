@@ -1,0 +1,43 @@
+# GodMode default configuration (v1.1.1)
+
+session:
+  include_extended_hours: false
+  include_premarket_in_vwap: false
+  exchange_timezone: "America/New_York"
+  rth_open_time: "09:30:00"
+
+snapshot:
+  interval_seconds: 10
+
+zone:
+  # Spec default example rule:
+  # abs(signed_distance_to_level_atr) <= 0.25
+  level_width_atr_default: 0.25
+
+atr:
+  period_bars: 14
+  atr_blend_alpha: 0.7
+  # If prior session ATR seed is missing, choose one fallback:
+  # - daily_fallback: daily_ATR / sqrt(390)
+  # - fixed_default: fixed value (set below)
+  fixed_default_atr: 0.50
+
+ema:
+  confluence_ref: 0.25
+
+smart_money:
+  # floor_atr * ATR_14_1m is used to cap buy_on_red/sell_on_green denominator
+  return_floor_atr: 0.02
+  epsilon: 1.0e-9
+
+resolution:
+  success_threshold_atr: 0.50
+  failure_threshold_atr: 0.35
+  timeout_seconds: 300
+
+storage:
+  root_dir: "data/output"
+  compression: "zstd"  # preferred; snappy acceptable if needed
+
+
+

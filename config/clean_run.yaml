@@ -1,0 +1,41 @@
+# Clean run config (starts a fresh dataset without deleting old outputs)
+#
+# Use this when you want to "start over" with a tight marker strategy and keep prior experiments intact.
+# Start the web UI with:
+#   python -m godmode.cli.main web --config config/clean_run.yaml
+
+session:
+  include_extended_hours: false
+  include_premarket_in_vwap: false
+  exchange_timezone: "America/Chicago"
+  rth_open_time: "09:30:00"
+
+snapshot:
+  interval_seconds: 10
+
+zone:
+  level_width_atr_default: 0.25
+
+atr:
+  period_bars: 14
+  atr_blend_alpha: 0.7
+  fixed_default_atr: 0.50
+
+ema:
+  confluence_ref: 0.25
+
+smart_money:
+  return_floor_atr: 0.02
+  epsilon: 1.0e-9
+
+resolution:
+  success_threshold_atr: 0.50
+  failure_threshold_atr: 0.35
+  timeout_seconds: 300
+
+storage:
+  # New, clean output root (separate from data/output, data/output_rerun*, etc.)
+  root_dir: "data/output_clean"
+  compression: "zstd"
+
+

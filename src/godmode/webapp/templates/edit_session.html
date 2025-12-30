@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GodMode — {{ "Edit" if mode == "edit" else "Duplicate" }} Session</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79b8ff;
+            --success: #3fb950;
+            --error: #f85149;
+            --warning: #d29922;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container { max-width: 700px; margin: 0 auto; }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--accent);
+            font-weight: 500;
+        }
+        .mode-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            margin-left: 1rem;
+        }
+        .mode-edit { background: var(--warning); color: var(--bg); }
+        .mode-duplicate { background: var(--success); color: var(--bg); }
+        .form-group { margin-bottom: 1.25rem; }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        input, select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.95rem;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .row { display: flex; gap: 1rem; }
+        .row > .form-group { flex: 1; }
+        .hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+        .section-title {
+            font-size: 0.9rem;
+            color: var(--text);
+            margin: 2rem 0 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        button.submit-btn {
+            width: 100%;
+            padding: 1rem;
+            margin-top: 1.5rem;
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        button.submit-btn:hover { background: var(--accent-hover); }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 1.5rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.85rem;
+        }
+        .back-link:hover { color: var(--accent); }
+        .marker-block {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .marker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .marker-label { font-weight: 600; color: var(--accent); }
+        .marker-times { display: flex; gap: 1rem; margin-bottom: 1rem; }
+        .marker-times .form-group { flex: 1; }
+        .info-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1.5rem;
+            font-size: 0.85rem;
+        }
+        .info-box.warning { border-color: var(--warning); }
+        .info-box.success { border-color: var(--success); }
+        /* Chart styles */
+        .chart-section {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .chart-title { font-weight: 600; color: var(--accent); }
+        .chart-controls { display: flex; gap: 0.5rem; align-items: center; }
+        .tf-btn {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 0.35rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .tf-btn:hover { border-color: var(--accent); color: var(--text); }
+        .tf-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+        .load-chart-btn {
+            background: var(--accent);
+            border: none;
+            color: var(--bg);
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 600;
+        }
+        #chart-container { width: 100%; height: 350px; background: var(--bg); border-radius: 6px; }
+        .chart-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        .click-info {
+            margin-top: 0.75rem;
+            padding: 0.75rem;
+            background: var(--bg);
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .click-info strong { color: var(--warning); }
+        .set-btn {
+            background: transparent;
+            border: 1px solid var(--success);
+            color: var(--success);
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            margin-left: 0.5rem;
+        }
+        .set-btn:hover { background: rgba(63, 185, 80, 0.1); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/sessions/{{ date }}/{{ ticker }}/{{ session_id }}/report" class="back-link">← Back to Report</a>
+        <h1>
+            {{ "Edit" if mode == "edit" else "Duplicate" }} Session
+            <span class="mode-badge {{ 'mode-edit' if mode == 'edit' else 'mode-duplicate' }}">
+                {{ "EDIT" if mode == "edit" else "DUPLICATE" }}
+            </span>
+        </h1>
+        
+        {% if mode == "edit" %}
+        <div class="info-box warning">
+            <strong>⚠️ Edit Mode:</strong> Saving will overwrite the existing session data and re-analyze.
+        </div>
+        {% else %}
+        <div class="info-box success">
+            <strong>📋 Duplicate Mode:</strong> Saving will create a new session. The original will remain untouched.
+        </div>
+        {% endif %}
+        
+        <form method="POST" action="/session/{{ date }}/{{ ticker }}/{{ session_id }}/{{ mode }}">
+            <div class="form-group">
+                <label>Ticker</label>
+                <input type="text" id="tickers" name="tickers" value="{{ ticker }}" readonly>
+            </div>
+
+            <div class="form-group">
+                <label for="timezone">Timezone</label>
+                <select id="timezone" name="timezone">
+                    <option value="America/Chicago" selected>Central (America/Chicago)</option>
+                    <option value="America/New_York">Eastern (America/New_York)</option>
+                    <option value="America/Los_Angeles">Pacific (America/Los_Angeles)</option>
+                    <option value="America/Denver">Mountain (America/Denver)</option>
+                    <option value="UTC">UTC</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="direction_bias">Direction Bias</label>
+                <select id="direction_bias" name="direction_bias">
+                    <option value="long" {{ 'selected' if direction_bias == 'long' else '' }}>Long</option>
+                    <option value="short" {{ 'selected' if direction_bias == 'short' else '' }}>Short</option>
+                </select>
+            </div>
+
+            <div class="section-title">Levels</div>
+
+            <!-- Interactive Chart Section -->
+            <div class="chart-section">
+                <div class="chart-header">
+                    <span class="chart-title">📈 Click to Set Time, Right-Click to Set Price</span>
+                    <div class="chart-controls">
+                        <button type="button" class="tf-btn" data-tf="30s">30s</button>
+                        <button type="button" class="tf-btn active" data-tf="1m">1m</button>
+                        <button type="button" class="tf-btn" data-tf="2m">2m</button>
+                        <button type="button" class="tf-btn" data-tf="3m">3m</button>
+                        <button type="button" class="load-chart-btn" onclick="loadChart()">Load Chart</button>
+                    </div>
+                </div>
+                <div id="chart-container">
+                    <div class="chart-placeholder">Click "Load Chart" to view candles</div>
+                </div>
+                <div class="click-info" id="click-info" style="display:none;">
+                    <strong>Click:</strong> <span id="click-time">—</span> @ <span id="click-price">—</span>
+                    <button type="button" class="set-btn" onclick="setFromClick('start')">→ Level 1 Start</button>
+                    <button type="button" class="set-btn" onclick="setFromClick('end')">→ Level 1 End</button>
+                </div>
+                <div class="click-info" id="rightclick-info" style="display:none;">
+                    <strong>Right-Click (Price Line):</strong> <span id="rightclick-price">—</span>
+                    <button type="button" class="set-btn" onclick="setRightClickPrice()">→ Set as Level 1 Price</button>
+                </div>
+                <div class="hint" style="margin-top:0.5rem;">
+                    <b>Left-click</b> = set time | <b>Right-click</b> = set price line
+                </div>
+            </div>
+
+            <div id="levels-container">
+                {% if levels %}
+                {% for lv in levels %}
+                <div class="marker-block" id="level-row-{{ loop.index }}">
+                    <div class="marker-header">
+                        <span class="marker-label">Level {{ loop.index }}</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Price</label>
+                        <div class="row">
+                            <div class="form-group">
+                                <input type="number" step="any" id="level_price_{{ loop.index }}" name="level_price_{{ loop.index }}" value="{{ lv.price }}">
+                            </div>
+                            <div class="form-group">
+                                <select name="level_kind_{{ loop.index }}">
+                                    <option value="support" {{ 'selected' if lv.kind == 'support' else '' }}>support</option>
+                                    <option value="resistance" {{ 'selected' if lv.kind == 'resistance' else '' }}>resistance</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="marker-times">
+                        <div class="form-group">
+                            <label>Start Time</label>
+                            <input type="datetime-local" name="level_start_{{ loop.index }}" id="level_start_{{ loop.index }}" step="1" value="">
+                            <div class="hint">Original: {{ lv.start_ts_ms }}</div>
+                        </div>
+                        <div class="form-group">
+                            <label>End Time</label>
+                            <input type="datetime-local" name="level_end_{{ loop.index }}" id="level_end_{{ loop.index }}" step="1" value="">
+                            <div class="hint">Original: {{ lv.end_ts_ms }}</div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Outcome</label>
+                        <select name="level_outcome_{{ loop.index }}">
+                            <option value="" {{ 'selected' if not lv.outcome else '' }}>— pending —</option>
+                            <option value="win" {{ 'selected' if lv.outcome == 'win' else '' }}>win</option>
+                            <option value="loss" {{ 'selected' if lv.outcome == 'loss' else '' }}>loss</option>
+                        </select>
+                    </div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <!-- Fallback: show one empty level row when no levels exist -->
+                <div class="marker-block" id="level-row-1">
+                    <div class="marker-header">
+                        <span class="marker-label">Level 1</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Price</label>
+                        <div class="row">
+                            <div class="form-group">
+                                <input type="number" step="any" id="level_price_1" name="level_price_1" value="" placeholder="e.g. 1.1282">
+                            </div>
+                            <div class="form-group">
+                                <select name="level_kind_1">
+                                    <option value="support" selected>support</option>
+                                    <option value="resistance">resistance</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="marker-times">
+                        <div class="form-group">
+                            <label>Start Time</label>
+                            <input type="datetime-local" name="level_start_1" id="level_start_1" step="1" value="">
+                        </div>
+                        <div class="form-group">
+                            <label>End Time</label>
+                            <input type="datetime-local" name="level_end_1" id="level_end_1" step="1" value="">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Outcome</label>
+                        <select name="level_outcome_1">
+                            <option value="" selected>— pending —</option>
+                            <option value="win">win</option>
+                            <option value="loss">loss</option>
+                        </select>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <input type="hidden" name="original_session_id" value="{{ session_id }}">
+            <input type="hidden" name="level_count" id="level_count" value="{{ levels|length if levels else 1 }}">
+
+            <button type="submit" class="submit-btn">
+                {{ "Save & Re-analyze" if mode == "edit" else "Create Duplicate" }}
+            </button>
+        </form>
+    </div>
+
+    <script>
+        // Chart functionality (same as record.html)
+        let chart = null;
+        let candleSeries = null;
+        let chartData = [];
+        let lastClickTime = null;
+        let lastClickPrice = null;
+        let lastRightClickPrice = null;
+        let priceLine = null;
+        let currentTimeframe = '1m';
+        
+        document.querySelectorAll('.tf-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                currentTimeframe = this.dataset.tf;
+                if (chartData.length > 0) loadChart();
+            });
+        });
+        
+        async function loadChart() {
+            const ticker = document.getElementById('tickers').value.trim();
+            const tz = document.getElementById('timezone').value;
+            const container = document.getElementById('chart-container');
+            container.innerHTML = '<div class="chart-placeholder">Loading chart...</div>';
+            
+            try {
+                const resp = await fetch(`/api/chart_candles?ticker=${encodeURIComponent(ticker)}&timeframe=${currentTimeframe}&timezone=${encodeURIComponent(tz)}`);
+                const data = await resp.json();
+                
+                if (data.error) {
+                    container.innerHTML = `<div class="chart-placeholder" style="color:var(--error);">${data.error}</div>`;
+                    return;
+                }
+                
+                chartData = data.candles || [];
+                if (chartData.length === 0) {
+                    container.innerHTML = '<div class="chart-placeholder">No candle data</div>';
+                    return;
+                }
+                
+                container.innerHTML = '';
+                chart = LightweightCharts.createChart(container, {
+                    width: container.clientWidth,
+                    height: 350,
+                    layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
+                    grid: { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
+                    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                    timeScale: { timeVisible: true, secondsVisible: currentTimeframe === '30s', borderColor: '#30363d' },
+                    rightPriceScale: { borderColor: '#30363d' },
+                });
+                
+                candleSeries = chart.addCandlestickSeries({
+                    upColor: '#3fb950', downColor: '#f85149',
+                    borderUpColor: '#3fb950', borderDownColor: '#f85149',
+                    wickUpColor: '#3fb950', wickDownColor: '#f85149',
+                });
+                
+                candleSeries.setData(chartData);
+                chart.timeScale().fitContent();
+                
+                chart.subscribeClick(param => {
+                    if (param.time && param.point) {
+                        const price = candleSeries.coordinateToPrice(param.point.y);
+                        if (price !== null) {
+                            lastClickTime = param.time;
+                            lastClickPrice = price.toFixed(4);
+                            const date = new Date(param.time * 1000);
+                            const timeStr = date.toLocaleString('en-US', { 
+                                timeZone: tz, month: 'short', day: 'numeric',
+                                hour: '2-digit', minute: '2-digit', second: '2-digit'
+                            });
+                            document.getElementById('click-time').textContent = timeStr;
+                            document.getElementById('click-price').textContent = '$' + lastClickPrice;
+                            document.getElementById('click-info').style.display = 'block';
+                        }
+                    }
+                });
+                
+                // Right-click handler (for price line)
+                container.addEventListener('contextmenu', function(e) {
+                    e.preventDefault();
+                    if (!chart || !candleSeries) return;
+                    
+                    const rect = container.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const price = candleSeries.coordinateToPrice(y);
+                    
+                    if (price !== null) {
+                        lastRightClickPrice = price.toFixed(4);
+                        document.getElementById('rightclick-price').textContent = '$' + lastRightClickPrice;
+                        document.getElementById('rightclick-info').style.display = 'block';
+                        
+                        if (priceLine) { candleSeries.removePriceLine(priceLine); }
+                        priceLine = candleSeries.createPriceLine({
+                            price: parseFloat(lastRightClickPrice),
+                            color: '#d29922',
+                            lineWidth: 2,
+                            lineStyle: LightweightCharts.LineStyle.Dashed,
+                            axisLabelVisible: true,
+                            title: 'Support/Resistance',
+                        });
+                    }
+                });
+            } catch (e) {
+                container.innerHTML = `<div class="chart-placeholder" style="color:var(--error);">Error: ${e.message}</div>`;
+            }
+        }
+        
+        function setRightClickPrice() {
+            if (!lastRightClickPrice) { alert('Right-click on chart first'); return; }
+            const input = document.getElementById('level_price_1');
+            if (input) { input.value = lastRightClickPrice; input.style.borderColor = 'var(--success)'; setTimeout(() => input.style.borderColor = '', 2000); }
+        }
+        
+        function setFromClick(target) {
+            if (!lastClickTime || !lastClickPrice) { alert('Click on chart first'); return; }
+            const tz = document.getElementById('timezone').value;
+            const date = new Date(lastClickTime * 1000);
+            const localDate = new Date(date.toLocaleString('en-US', { timeZone: tz }));
+            const dtValue = `${localDate.getFullYear()}-${String(localDate.getMonth()+1).padStart(2,'0')}-${String(localDate.getDate()).padStart(2,'0')}T${String(localDate.getHours()).padStart(2,'0')}:${String(localDate.getMinutes()).padStart(2,'0')}:${String(localDate.getSeconds()).padStart(2,'0')}`;
+            
+            if (target === 'start') {
+                const input = document.getElementById('level_start_1');
+                if (input) { input.value = dtValue; input.style.borderColor = 'var(--success)'; setTimeout(() => input.style.borderColor = '', 2000); }
+            } else if (target === 'end') {
+                const input = document.getElementById('level_end_1');
+                if (input) { input.value = dtValue; input.style.borderColor = 'var(--success)'; setTimeout(() => input.style.borderColor = '', 2000); }
+            }
+        }
+        
+        // Auto-load chart on page load
+        window.addEventListener('load', () => { setTimeout(loadChart, 500); });
+        
+        // Pre-populate datetime fields from timestamps
+        const levelData = {{ levels | tojson | safe }};
+        const tz = document.getElementById('timezone').value;
+        
+        levelData.forEach((lv, idx) => {
+            const i = idx + 1;
+            if (lv.start_ts_ms) {
+                const d = new Date(lv.start_ts_ms);
+                const localD = new Date(d.toLocaleString('en-US', { timeZone: tz }));
+                const val = `${localD.getFullYear()}-${String(localD.getMonth()+1).padStart(2,'0')}-${String(localD.getDate()).padStart(2,'0')}T${String(localD.getHours()).padStart(2,'0')}:${String(localD.getMinutes()).padStart(2,'0')}:${String(localD.getSeconds()).padStart(2,'0')}`;
+                const el = document.getElementById('level_start_' + i);
+                if (el) el.value = val;
+            }
+            if (lv.end_ts_ms) {
+                const d = new Date(lv.end_ts_ms);
+                const localD = new Date(d.toLocaleString('en-US', { timeZone: tz }));
+                const val = `${localD.getFullYear()}-${String(localD.getMonth()+1).padStart(2,'0')}-${String(localD.getDate()).padStart(2,'0')}T${String(localD.getHours()).padStart(2,'0')}:${String(localD.getMinutes()).padStart(2,'0')}:${String(localD.getSeconds()).padStart(2,'0')}`;
+                const el = document.getElementById('level_end_' + i);
+                if (el) el.value = val;
+            }
+        });
+    </script>
+</body>
+</html>
+

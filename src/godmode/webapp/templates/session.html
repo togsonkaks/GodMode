@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Session {{ ticker }} {{ date }} {{ session_id }}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+      table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
+      th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; }
+      th { background: #f6f6f6; text-align: left; }
+      a { color: #0b57d0; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .muted { color: #666; }
+      code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <p><a href="/">← sessions</a></p>
+    <h2>Session</h2>
+    <p class="muted">
+      <code>{{ date }}</code> <code>{{ ticker }}</code> <code>{{ session_id }}</code>
+    </p>
+    <p><a href="/sessions/{{ date }}/{{ ticker }}/{{ session_id }}/report">View report →</a></p>
+
+    <h3>Episodes</h3>
+    {% if episodes|length == 0 %}
+      <p>No episodes for this session.</p>
+    {% else %}
+      <table>
+        <thead>
+          <tr>
+            <th>episode_id</th>
+            <th>episode_source</th>
+            <th>level_id</th>
+            <th>level_price</th>
+            <th>zone_entry_time</th>
+            <th>resolution_trigger</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in episodes %}
+            <tr>
+              <td><a href="/episodes/{{ date }}/{{ ticker }}/{{ session_id }}/{{ e.episode_id }}">{{ e.episode_id }}</a></td>
+              <td>{{ e.episode_source }}</td>
+              <td>{{ e.level_id }}</td>
+              <td>{{ e.level_price }}</td>
+              <td>{{ e.zone_entry_time }}</td>
+              <td>{{ e.resolution_trigger }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <h3>Markers</h3>
+    {% if markers|length == 0 %}
+      <p>No markers recorded.</p>
+    {% else %}
+      <table>
+        <thead>
+          <tr><th>ts_ms</th><th>marker_type</th><th>direction_bias</th><th>marker_id</th><th>notes</th></tr>
+        </thead>
+        <tbody>
+          {% for m in markers %}
+            <tr>
+              <td>{{ m.ts_ms }}</td>
+              <td>{{ m.marker_type }}</td>
+              <td>{{ m.direction_bias }}</td>
+              <td>{{ m.marker_id }}</td>
+              <td>{{ m.notes }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </body>
+</html>
+
+

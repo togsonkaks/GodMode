@@ -1,0 +1,1054 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Report {{ ticker }} {{ date }} {{ session_id }}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+      table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
+      th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; }
+      th { background: #f6f6f6; text-align: left; }
+      a { color: #0b57d0; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .muted { color: #666; }
+      code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+      .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; background:#f3f4f6; margin-right: 6px; }
+      .action-btn { 
+        display: inline-block; 
+        padding: 6px 12px; 
+        margin-right: 8px; 
+        border: 1px solid #ddd; 
+        border-radius: 4px; 
+        background: #f8f9fa; 
+        color: #333; 
+        text-decoration: none; 
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .action-btn:hover { background: #e9ecef; text-decoration: none; }
+      .action-btn.primary { background: #0b57d0; color: white; border-color: #0b57d0; }
+      .action-btn.primary:hover { background: #0842a0; }
+      .action-buttons { margin: 16px 0; }
+
+      /* Touch score bars (support-long V1) */
+      .touch-scorecard {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        margin: 12px 0 18px 0;
+        background: #fff;
+      }
+      .touch-scorecard .header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .touch-scorecard .verdict {
+        font-weight: 700;
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: #f3f4f6;
+        display: inline-block;
+      }
+      .touch-bars {
+        position: relative;
+        display: flex;
+        align-items: stretch;
+        gap: 4px;
+        height: 160px;
+        padding: 12px 8px;
+        border-radius: 8px;
+        background: #050810;
+        overflow-x: auto;
+      }
+      .touch-bars::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 50%;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .touch-column {
+        position: relative;
+        width: 18px;
+        min-width: 18px;
+      }
+      .cum-bar {
+        position: absolute;
+        left: 0;
+        right: 0;
+        border-radius: 4px;
+        opacity: 0.95;
+      }
+      .cum-bar.positive {
+        bottom: 50%;
+      }
+      .cum-bar.negative {
+        top: 50%;
+      }
+      .touch-column .idx {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: -18px;
+        font-size: 10px;
+        text-align: center;
+        color: #9ca3af;
+      }
+      .touch-scorecard .reasons {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 10px;
+        font-size: 12px;
+      }
+      .touch-scorecard .reasons ul { margin: 4px 0 0 18px; }
+      .touch-scorecard .reasons .pos { color: #166534; }
+      .touch-scorecard .reasons .neg { color: #991b1b; }
+    </style>
+  </head>
+  <body>
+    <p><a href="/sessions/{{ date }}/{{ ticker }}/{{ session_id }}">← session</a></p>
+    <h2>Session Report</h2>
+    <p class="muted">
+      <code>{{ date }}</code> <code>{{ ticker }}</code> <code>{{ session_id }}</code>
+    </p>
+    
+    <div class="action-buttons">
+      <a href="/session/{{ date }}/{{ ticker }}/{{ session_id }}/edit" class="action-btn">📝 Edit Session</a>
+      <a href="/session/{{ date }}/{{ ticker }}/{{ session_id }}/duplicate" class="action-btn">📋 Duplicate Session</a>
+    </div>
+
+    <h3>Outcomes</h3>
+    <p class="muted">Episodes total: <b>{{ report.episodes_total }}</b></p>
+    {% if report.outcome_counts %}
+      <p>
+        {% for k, v in report.outcome_counts.items() %}
+          <span class="pill"><b>{{ k }}</b>: {{ v }}</span>
+        {% endfor %}
+      </p>
+    {% else %}
+      <p class="muted">No outcome field found.</p>
+    {% endif %}
+
+    <h3>Metrics (sanity)</h3>
+    <table>
+      <thead>
+        <tr><th>metric</th><th>min</th><th>p50</th><th>p90</th><th>max</th><th>mean</th></tr>
+      </thead>
+      <tbody>
+        {% for name, st in report.metrics.items() %}
+          <tr>
+            <td>{{ name }}</td>
+            {% if st %}
+              <td>{{ st.min }}</td><td>{{ st.p50 }}</td><td>{{ st.p90 }}</td><td>{{ st.max }}</td><td>{{ st.mean }}</td>
+            {% else %}
+              <td colspan="5" class="muted">n/a</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3>Feature ranking (exploratory)</h3>
+    <p class="muted">{{ report.note }}</p>
+    {% if report.feature_ranking and report.feature_ranking|length > 0 %}
+      <table>
+        <thead>
+          <tr><th>feature</th><th>mean(win)</th><th>mean(loss)</th><th>diff</th><th>|diff|</th><th>effect_size</th></tr>
+        </thead>
+        <tbody>
+          {% for r in report.feature_ranking %}
+            <tr>
+              <td><code>{{ r.feature }}</code></td>
+              <td>{{ r.mean_win }}</td>
+              <td>{{ r.mean_loss }}</td>
+              <td>{{ r.diff }}</td>
+              <td>{{ r.abs_diff }}</td>
+              <td>{{ r.effect_size }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">Not enough win/loss samples to rank features yet.</p>
+    {% endif %}
+
+    <h3>Watch windows (pre-move)</h3>
+    <p class="muted">
+      Uses markers with an <code>end time</code> (end = move anchor <code>T</code>) and optional support/resistance price tag.
+      Band stats are computed inside ±1.5% of the tagged price.
+    </p>
+
+    {% if report.watch_windows and report.watch_windows|length > 0 %}
+      {% for w in report.watch_windows %}
+        <h4 style="margin-top: 18px;">{{ w.marker_type }} · watch_start={{ w.watch_start_ts_ms|chicago }} · T={{ w.watch_end_ts_ms|chicago }}</h4>
+        <p class="muted">band_pct={{ w.band_pct }} · levels analyzed={{ w.levels|length }}</p>
+
+        {% for lv in w.levels %}
+          <h5 style="margin-top: 14px;">Level: {{ lv.level_kind }} {% if lv.indicator_name %}{{ lv.indicator_name|upper }} (~{{ "%.4f"|format(lv.level_price) }}){% else %}{{ lv.level_price }}{% endif %}</h5>
+          {% if lv.between.flags %}
+            <p class="muted">flags: score={{ lv.between.flags.score }} · {{ lv.between.flags.flags }}</p>
+          {% endif %}
+          {% if lv.checklist %}
+            <p class="muted">
+              <b>Context</b> (compression): {{ lv.checklist.context.compression_level }}
+              {% if lv.checklist.context.compression_trend_into_T %}
+                · {{ lv.checklist.context.compression_trend_into_T }}
+              {% endif %}
+              · mean={{ lv.checklist.context.compression_mean }}
+              &nbsp; | &nbsp;
+              <b>Trigger</b> (last 30s): {{ lv.checklist.trigger.reaction }}
+              · band_delta={{ lv.checklist.trigger.band_delta_last30s }}
+              · aggr={{ lv.checklist.trigger.rel_aggr_last30s }}
+            </p>
+          {% endif %}
+
+          <h5>Between watch_start → T</h5>
+          <table>
+            <thead>
+              <tr>
+                <th>points</th><th>duration_s</th><th>delta_sum</th><th>band_delta_sum</th><th>time_in_band_s</th><th>touch_count</th><th>cross_count</th><th>reclaim_attempts</th><th>reclaim_hold_rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>{{ lv.between.points }}</td>
+                <td>{{ lv.between.duration_s }}</td>
+                <td>{{ lv.between.delta_sum }}</td>
+                <td>{{ lv.between.band_delta_sum }}</td>
+                <td>{{ lv.between.time_in_band_s }}</td>
+                <td>{{ lv.between.touch_count }}</td>
+                <td>{{ lv.between.cross_count }}</td>
+                <td>{{ lv.between.reclaim_attempts }}</td>
+                <td>{{ lv.between.reclaim_hold_rate }}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h5>Countdown into T</h5>
+          <table>
+            <thead>
+              <tr>
+                <th>window</th><th>points</th><th>delta_sum</th><th>band_delta_sum</th><th>relative_aggression_mean</th><th>time_in_band_s</th><th>flag_score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for c in lv.countdown %}
+                <tr>
+                  <td><code>{{ c.label }}</code></td>
+                  <td>{{ c.points }}</td>
+                  <td>{{ c.delta_sum }}</td>
+                  <td>{{ c.band_delta_sum }}</td>
+                  <td>{{ c.relative_aggression_mean }}</td>
+                  <td>{{ c.time_in_band_s }}</td>
+                  <td>{% if c.flags %}{{ c.flags.score }}{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endfor %}
+      {% endfor %}
+    {% else %}
+      <p class="muted">No watch-window markers found (add a marker end time to enable this section).</p>
+    {% endif %}
+
+    <h3>Level Chain (support path)</h3>
+    <p class="muted">
+      This is the simplified workflow: each support/resistance level has its own watch window.
+      The <b>Move</b> between levels is computed automatically as <code>Level i End → Level i+1 Start</code>.
+      <br/><b>Session-Wide Tracking</b>: Each level is also tracked across the <em>entire session</em> to catch retests and role flips.
+    </p>
+
+    {% if report.level_chains and report.level_chains|length > 0 %}
+      {% for ch in report.level_chains %}
+        <h4 style="margin-top: 18px;">chain_id={{ ch.chain_id }} · levels={{ ch.levels|length }}</h4>
+        <p class="muted">{{ ch.note }}</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>level</th>
+              <th>watch_start</th>
+              <th>watch_end (T)</th>
+              <th>outcome</th>
+              <th>context (compression)</th>
+              <th>trigger (last 30s)</th>
+              <th>move_from_prev</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lv in ch.levels %}
+              <tr>
+                <td><code>{{ lv.level_kind }}</code> {% if lv.indicator_name %}<b>{{ lv.indicator_name|upper }}</b> (~{{ "%.4f"|format(lv.level_price) }}){% else %}{{ lv.level_price }}{% endif %}</td>
+                <td>{{ lv.watch_start_ts_ms|chicago }}</td>
+                <td>{{ lv.watch_end_ts_ms|chicago }}</td>
+                <td>{% if lv.level_outcome %}<b>{{ lv.level_outcome }}</b>{% else %}<span class="muted">pending</span>{% endif %}</td>
+                <td>
+                  {% if lv.checklist and lv.checklist.context %}
+                    <code>{{ lv.checklist.context.compression_level }}</code>
+                    {% if lv.checklist.context.compression_trend_into_T %}
+                      · {{ lv.checklist.context.compression_trend_into_T }}
+                    {% endif %}
+                    · mean={{ lv.checklist.context.compression_mean }}
+                  {% else %}
+                    <span class="muted">n/a</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if lv.checklist and lv.checklist.trigger %}
+                    <code>{{ lv.checklist.trigger.reaction }}</code>
+                    · band_delta={{ lv.checklist.trigger.band_delta_last30s }}
+                    · aggr={{ lv.checklist.trigger.rel_aggr_last30s }}
+                  {% else %}
+                    <span class="muted">n/a</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if lv.move_from_prev %}
+                    {% if lv.move_from_prev.verdict %}
+                      <b>{{ lv.move_from_prev.verdict }}</b><br/>
+                    {% endif %}
+                    <span class="muted">
+                      bucket=<code>{{ lv.move_from_prev.velocity_bucket }}</code>
+                      · dir=<code>{{ lv.move_from_prev.direction }}</code>
+                      · flow=<code>{{ lv.move_from_prev.flow_side }}_{{ lv.move_from_prev.flow_strength }}</code>
+                    </span><br/>
+                    dur_s={{ lv.move_from_prev.duration_s }}
+                    · ret_pct={{ lv.move_from_prev.return_pct }}
+                    · delta={{ lv.move_from_prev.delta_sum }}
+                  {% else %}
+                    <span class="muted">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <!-- Level Stats and Flags (aggregated from touch packets) -->
+        <h5 style="margin-top: 16px;">Level Stats & Quality (from Touch Packets)</h5>
+        <table>
+          <thead>
+            <tr>
+              <th>level</th>
+              <th>touches</th>
+              <th>quality</th>
+              <th>delta_flip_rate</th>
+              <th>bounce_30s_pos_rate</th>
+              <th>compression (mean/max)</th>
+              <th>flags</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lv in ch.levels %}
+              <tr>
+                <td><code>{{ lv.level_kind }}</code> {{ lv.level_price }}</td>
+                <td>{% if lv.level_stats %}{{ lv.level_stats.get('touches', 'n/a') }}{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                <td>
+                  {% if lv.level_stats %}
+                    {% set quality = lv.level_stats.get('quality', 'n/a') %}
+                    {% if quality == 'strong' %}
+                      <b style="color: #3fb950;">{{ quality }}</b>
+                    {% elif quality == 'exhausted' or quality == 'weak' %}
+                      <b style="color: #f85149;">{{ quality }}</b>
+                    {% else %}
+                      <code>{{ quality }}</code>
+                    {% endif %}
+                  {% else %}
+                    <span class="muted">n/a</span>
+                  {% endif %}
+                </td>
+                <td>{% if lv.level_stats and lv.level_stats.get('delta_flip_rate') is not none %}{{ "%.0f"|format(lv.level_stats.get('delta_flip_rate') * 100) }}%{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                <td>{% if lv.level_stats and lv.level_stats.get('bounce_30s_pos_rate') is not none %}{{ "%.0f"|format(lv.level_stats.get('bounce_30s_pos_rate') * 100) }}%{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                <td>
+                  {% if lv.level_stats and lv.level_stats.get('compression_mean') is not none %}
+                    {{ lv.level_stats.get('compression_mean') }} / {{ lv.level_stats.get('compression_max', 'n/a') }}
+                  {% else %}
+                    <span class="muted">n/a</span>
+                  {% endif %}
+                </td>
+                <td style="font-size: 11px;">
+                  {% if lv.level_flags %}
+                    {% for g in lv.level_flags.green %}
+                      <span style="color: #3fb950;">✓ {{ g }}</span><br/>
+                    {% endfor %}
+                    {% for r in lv.level_flags.red %}
+                      <span style="color: #f85149;">✗ {{ r }}</span><br/>
+                    {% endfor %}
+                  {% else %}
+                    <span class="muted">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <!-- UNIFIED ANALYSIS (Phase-Weighted Verdict) -->
+        {% for lv in ch.levels %}
+          {% if lv.unified_analysis %}
+            {% set ua = lv.unified_analysis %}
+            {% set verdict = ua.verdict %}
+            {% set overall = ua.overall %}
+            
+            <div style="margin-top: 20px; padding: 16px; border: 2px solid {% if verdict.direction == 'LONG' %}#3fb950{% elif verdict.direction == 'SHORT' %}#f85149{% else %}#9ca3af{% endif %}; border-radius: 8px; background: {% if verdict.direction == 'LONG' %}#0d1117{% elif verdict.direction == 'SHORT' %}#1a0a0a{% else %}#111{% endif %};">
+              
+              <!-- Verdict Header -->
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h4 style="margin: 0; color: #e6edf3;">
+                  🎯 Unified Analysis: <code>{{ lv.level_kind }}</code> {% if lv.indicator_name %}{{ lv.indicator_name|upper }}{% else %}{{ lv.level_price }}{% endif %}
+                </h4>
+                <div style="padding: 6px 16px; border-radius: 999px; font-weight: bold; font-size: 16px;
+                  {% if verdict.confidence == 'TAKE' %}background: #238636; color: white;
+                  {% elif verdict.confidence == 'WAIT' %}background: #9e6a03; color: white;
+                  {% elif verdict.confidence == 'LEAN' %}background: #6e7681; color: white;
+                  {% else %}background: #da3633; color: white;{% endif %}">
+                  {{ verdict.direction }} - {{ verdict.confidence }}
+                </div>
+              </div>
+              
+              <!-- Overall Balance -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                <div style="background: #161b22; padding: 12px; border-radius: 6px;">
+                  <div style="color: #8b949e; font-size: 12px; margin-bottom: 4px;">INST_BUY</div>
+                  <div style="font-size: 20px; color: #3fb950; font-weight: bold;">{{ overall.inst_buy_trades }} trades</div>
+                  <div style="color: #8b949e;">{{ "{:,.0f}".format(overall.inst_buy_volume) }} shares</div>
+                </div>
+                <div style="background: #161b22; padding: 12px; border-radius: 6px;">
+                  <div style="color: #8b949e; font-size: 12px; margin-bottom: 4px;">INST_SELL</div>
+                  <div style="font-size: 20px; color: #f85149; font-weight: bold;">{{ overall.inst_sell_trades }} trades</div>
+                  <div style="color: #8b949e;">{{ "{:,.0f}".format(overall.inst_sell_volume) }} shares</div>
+                </div>
+              </div>
+              
+              <!-- Minute-by-Minute Breakdown -->
+              {% if ua.minute_breakdown %}
+              <div style="background: #161b22; padding: 12px; border-radius: 6px; margin-bottom: 16px;">
+                <div style="color: #8b949e; font-size: 12px; margin-bottom: 8px;">MINUTE-BY-MINUTE BREAKDOWN</div>
+                <div style="font-size: 16px; font-family: monospace; letter-spacing: 1px; margin-bottom: 8px;">{{ ua.minute_progression }}</div>
+                <div style="max-height: 200px; overflow-y: auto;">
+                  <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+                    <thead>
+                      <tr style="background: #21262d; position: sticky; top: 0;">
+                        <th style="padding: 4px; text-align: left; color: #8b949e;">Min</th>
+                        <th style="padding: 4px; text-align: center; color: #8b949e;">T</th>
+                        <th style="padding: 4px; text-align: right; color: #8b949e;">Buy</th>
+                        <th style="padding: 4px; text-align: right; color: #8b949e;">Sell</th>
+                        <th style="padding: 4px; text-align: right; color: #8b949e;">Δ</th>
+                        <th style="padding: 4px; text-align: center; color: #8b949e;">INST</th>
+                        <th style="padding: 4px; text-align: left; color: #8b949e;">W</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for m in ua.minute_breakdown %}
+                        <tr style="border-bottom: 1px solid #30363d;">
+                          <td style="padding: 4px; color: #e6edf3; font-family: monospace;">{{ m.minute }}</td>
+                          <td style="padding: 4px; text-align: center; color: #8b949e;">{{ m.touches }}</td>
+                          <td style="padding: 4px; text-align: right; color: #3fb950;">{{ "{:,.0f}".format(m.buy_vol) }}</td>
+                          <td style="padding: 4px; text-align: right; color: #f85149;">{{ "{:,.0f}".format(m.sell_vol) }}</td>
+                          <td style="padding: 4px; text-align: right; color: {% if m.delta > 0 %}#3fb950{% elif m.delta < 0 %}#f85149{% else %}#8b949e{% endif %};">{{ "{:+,.0f}".format(m.delta) }}</td>
+                          <td style="padding: 4px; text-align: center; color: #e6edf3;">{{ m.inst_buy }}B/{{ m.inst_sell }}S</td>
+                          <td style="padding: 4px; color: {% if m.winner == 'BUYERS' %}#3fb950{% elif m.winner == 'SELLERS' %}#f85149{% else %}#8b949e{% endif %};">{{ m.winner_symbol }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              {% endif %}
+              
+              <!-- Wash Engine -->
+              {% if ua.wash_engine and ua.wash_engine.dumps|length > 0 %}
+              {% set we = ua.wash_engine %}
+              <div style="background: #161b22; padding: 12px; border-radius: 6px; margin-bottom: 16px; border-left: 3px solid {% if we.verdict_modifier == 'STRONG_WASH' %}#3fb950{% elif we.verdict_modifier == 'HARD_STOP' %}#f85149{% elif we.verdict_modifier == 'DECENT_WASH' %}#9e6a03{% else %}#6e7681{% endif %};">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <div style="color: #8b949e; font-size: 12px;">🛡️ WASH ENGINE</div>
+                  <div style="display: flex; gap: 8px; align-items: center;">
+                    <span style="font-size: 16px; font-weight: bold; color: {% if we.score >= 5 %}#3fb950{% elif we.score >= 3 %}#9e6a03{% elif we.score >= 1 %}#6e7681{% else %}#f85149{% endif %};">
+                      Score: {{ we.score }}
+                    </span>
+                    {% if we.verdict_modifier == 'STRONG_WASH' %}
+                    <span style="background: #238636; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px;">→ TAKE</span>
+                    {% elif we.verdict_modifier == 'DECENT_WASH' %}
+                    <span style="background: #9e6a03; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px;">→ LEAN</span>
+                    {% elif we.verdict_modifier == 'HARD_STOP' %}
+                    <span style="background: #da3633; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px;">⛔ HARD STOP</span>
+                    {% endif %}
+                  </div>
+                </div>
+                
+                <!-- Summary stats -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                  <div style="text-align: center;">
+                    <div style="font-size: 20px; color: #e6edf3;">{{ we.dumps|length }}</div>
+                    <div style="font-size: 10px; color: #8b949e;">Dumps</div>
+                  </div>
+                  <div style="text-align: center;">
+                    <div style="font-size: 20px; color: #3fb950;">{{ we.absorbed_count }}</div>
+                    <div style="font-size: 10px; color: #8b949e;">Absorbed</div>
+                  </div>
+                  <div style="text-align: center;">
+                    <div style="font-size: 20px; color: #f85149;">{{ we.failed_dumps }}</div>
+                    <div style="font-size: 10px; color: #8b949e;">Failed</div>
+                  </div>
+                </div>
+                
+                <!-- Dump details -->
+                {% for dump in we.dumps %}
+                <div style="border-top: 1px solid #30363d; padding-top: 8px; margin-top: 8px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span style="color: #f85149; font-weight: bold;">{{ dump.minute }}</span>
+                    <span style="color: #8b949e;">Dumped {{ "{:,.0f}".format(dump.sell_vol) }} ({{ dump.inst_sell }}S)</span>
+                    {% if dump.hard_stop %}
+                    <span style="color: #f85149;">⛔ HARD STOP</span>
+                    {% elif dump.absorbed %}
+                    <span style="color: #3fb950;">✓ ABSORBED (+{{ dump.score }})</span>
+                    {% else %}
+                    <span style="color: #6e7681;">WEAK (+{{ dump.score }})</span>
+                    {% endif %}
+                  </div>
+                  <div style="font-size: 11px; color: #8b949e;">
+                    {% for sig in dump.signals %}
+                    <div style="padding: 2px 0; color: {% if 'HARD_STOP' in sig %}#f85149{% elif sig.startswith('S') %}#3fb950{% else %}#8b949e{% endif %};">• {{ sig }}</div>
+                    {% endfor %}
+                  </div>
+                </div>
+                {% endfor %}
+                
+                <!-- Global signals -->
+                {% if we.signals %}
+                <div style="border-top: 1px solid #30363d; padding-top: 8px; margin-top: 8px;">
+                  <div style="color: #8b949e; font-size: 10px; margin-bottom: 4px;">GLOBAL SIGNALS</div>
+                  {% for sig in we.signals %}
+                  <div style="font-size: 11px; color: #3fb950;">• {{ sig }}</div>
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </div>
+              {% endif %}
+              
+              <!-- Phase Progression -->
+              <div style="background: #161b22; padding: 12px; border-radius: 6px; margin-bottom: 16px;">
+                <div style="color: #8b949e; font-size: 12px; margin-bottom: 8px;">PHASE PROGRESSION ({{ ua.phases|length }} phases)</div>
+                <div style="font-size: 24px; font-family: monospace; letter-spacing: 2px;">
+                  {% for p in ua.phases %}
+                    <span style="color: {% if p.winner == 'BUYERS' %}#3fb950{% elif p.winner == 'SELLERS' %}#f85149{% else %}#9ca3af{% endif %};">[{{ p.winner_symbol }}]</span>
+                  {% endfor %}
+                </div>
+              </div>
+              
+              <!-- Phase Table -->
+              <table style="width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 16px;">
+                <thead>
+                  <tr style="background: #21262d;">
+                    <th style="padding: 6px; text-align: left; color: #8b949e;">Phase</th>
+                    <th style="padding: 6px; text-align: left; color: #8b949e;">Touches</th>
+                    <th style="padding: 6px; text-align: right; color: #8b949e;">Buy Vol</th>
+                    <th style="padding: 6px; text-align: right; color: #8b949e;">Sell Vol</th>
+                    <th style="padding: 6px; text-align: right; color: #8b949e;">Delta</th>
+                    <th style="padding: 6px; text-align: center; color: #8b949e;">INST</th>
+                    <th style="padding: 6px; text-align: left; color: #8b949e;">Winner</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for p in ua.phases %}
+                    <tr style="border-bottom: 1px solid #30363d;">
+                      <td style="padding: 6px; color: #e6edf3;">P{{ p.phase_num }}</td>
+                      <td style="padding: 6px; color: #8b949e;">T{{ p.first_touch }}-T{{ p.last_touch }}</td>
+                      <td style="padding: 6px; text-align: right; color: #3fb950;">{{ "{:,.0f}".format(p.buy_vol) }}</td>
+                      <td style="padding: 6px; text-align: right; color: #f85149;">{{ "{:,.0f}".format(p.sell_vol) }}</td>
+                      <td style="padding: 6px; text-align: right; color: {% if p.delta > 0 %}#3fb950{% elif p.delta < 0 %}#f85149{% else %}#8b949e{% endif %};">{{ "{:+,.0f}".format(p.delta) }}</td>
+                      <td style="padding: 6px; text-align: center; color: #e6edf3;">{{ p.inst_buy }}B/{{ p.inst_sell }}S</td>
+                      <td style="padding: 6px; color: {% if p.winner == 'BUYERS' %}#3fb950{% elif p.winner == 'SELLERS' %}#f85149{% else %}#8b949e{% endif %};">{{ p.winner }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+              
+              <!-- Pattern Library Results -->
+              <div style="background: #161b22; padding: 12px; border-radius: 6px; margin-bottom: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                  <div style="color: #8b949e; font-size: 12px;">MATCHED PATTERNS ({{ ua.trend_signals|length }})</div>
+                  <div style="font-size: 20px; font-weight: bold; color: {% if ua.trend_score > 0 %}#3fb950{% elif ua.trend_score < 0 %}#f85149{% else %}#9ca3af{% endif %};">
+                    {{ "{:+d}".format(ua.trend_score) }}
+                  </div>
+                </div>
+                
+                <!-- Split patterns into bullish and bearish columns -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                  <!-- Bullish patterns -->
+                  <div>
+                    <div style="color: #3fb950; font-size: 11px; font-weight: bold; margin-bottom: 6px;">🟢 BULLISH</div>
+                    {% for sig in ua.trend_signals %}
+                      {% if sig.startswith('+') %}
+                        <div style="color: #3fb950; font-size: 11px; padding: 2px 0;">{{ sig }}</div>
+                      {% endif %}
+                    {% endfor %}
+                  </div>
+                  
+                  <!-- Bearish patterns -->
+                  <div>
+                    <div style="color: #f85149; font-size: 11px; font-weight: bold; margin-bottom: 6px;">🔴 BEARISH</div>
+                    {% for sig in ua.trend_signals %}
+                      {% if sig.startswith('-') or sig.startswith('⛔') %}
+                        <div style="color: #f85149; font-size: 11px; padding: 2px 0;">{{ sig }}</div>
+                      {% endif %}
+                    {% endfor %}
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Cautions -->
+              {% if verdict.cautions and verdict.cautions|length > 0 %}
+                <div style="background: #2d1f00; border: 1px solid #9e6a03; padding: 10px; border-radius: 6px;">
+                  <div style="color: #d29922; font-size: 12px; font-weight: bold; margin-bottom: 4px;">⚠️ CAUTIONS</div>
+                  <ul style="margin: 0; padding-left: 20px; color: #d29922; font-size: 12px;">
+                    {% for c in verdict.cautions %}
+                      <li>{{ c }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+              
+              <!-- Absorption Rate -->
+              <div style="margin-top: 12px; color: #8b949e; font-size: 12px;">
+                Absorption Rate: {{ overall.absorbed_count }}/{{ overall.inst_sell_trades }} ({{ "{:.0f}".format(overall.absorption_rate * 100) }}%)
+              </div>
+            </div>
+          {% endif %}
+        {% endfor %}
+
+        <!-- Top Bounces per Level -->
+        {% for lv in ch.levels %}
+          {% if lv.level_stats and lv.level_stats.get('top_bounces') and lv.level_stats.get('top_bounces')|length > 0 %}
+            <details style="margin-top: 10px; margin-bottom: 10px;">
+              <summary style="cursor: pointer; color: #0b57d0;">
+                <b>{{ lv.level_kind }} {{ lv.level_price }}</b> — Top {{ lv.level_stats.get('top_bounces', [])|length }} bounces (click to expand)
+              </summary>
+              <table style="margin-top: 8px; font-size: 12px;">
+                <thead>
+                  <tr>
+                    <th>ts_ms</th>
+                    <th>bounce_pct</th>
+                    <th>compression</th>
+                    <th>delta_30s</th>
+                    <th>rel_aggr_30s</th>
+                    <th>approach</th>
+                    <th>outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for tb in lv.level_stats.get('top_bounces', []) %}
+                    <tr>
+                      <td>{{ tb.ts_ms|chicago }}</td>
+                      <td><b>{{ "%.4f"|format(tb.bounce_pct) if tb.bounce_pct else "—" }}</b></td>
+                      <td>{{ tb.compression if tb.compression else "—" }}</td>
+                      <td>{{ tb.delta_30s if tb.delta_30s else "—" }}</td>
+                      <td>{{ tb.rel_aggr_30s if tb.rel_aggr_30s else "—" }}</td>
+                      <td><code>{{ tb.approach }}</code></td>
+                      <td><code>{{ tb.outcome }}</code></td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </details>
+          {% endif %}
+        {% endfor %}
+
+        <!-- Touch Score Timeline (support-long V1) -->
+        {% for lv in ch.levels %}
+          {% if lv.touch_scoring and lv.touch_packets and lv.touch_packets|length > 0 and lv.level_kind == 'support' %}
+            <div class="touch-scorecard">
+              <div class="header">
+                <div>
+                  <b>{{ lv.level_kind }} {% if lv.indicator_name %}{{ lv.indicator_name|upper }}{% else %}{{ lv.level_price }}{% endif %}</b>
+                  <span class="muted">
+                    · touches={{ lv.touch_scoring.touches }}
+                    · avg={{ lv.touch_scoring.avg_score }}
+                    · last5={{ lv.touch_scoring.last5_avg_score }}
+                    {% if lv.touch_scoring.peak_touch_number is not none %}
+                      · peak={{ lv.touch_scoring.peak_score }} (touch {{ lv.touch_scoring.peak_touch_number }})
+                    {% endif %}
+                  </span>
+                </div>
+                <!-- Old verdict removed - use Unified Analysis verdict instead -->
+              </div>
+
+              <div class="touch-bars" aria-label="Cumulative touch timeline">
+                {% for tp in lv.touch_packets %}
+                  {% set cum_height = tp.cum_height_pct or 0 %}
+                  {% set direction = "negative" if tp.cum_is_negative else "positive" %}
+                  {% set cum_color = tp.cum_score_color or '#CCCC00' %}
+                  {% set tooltip = "Touch #" ~ tp.touch_number ~ "\\nscore=" ~ tp.score_v1 ~ "\\ncumulative=" ~ tp.cum_score_v1 ~ "\\n+ " ~ (tp.reasons_plus|join('\\n+ ')) ~ "\\n- " ~ (tp.reasons_minus|join('\\n- ')) %}
+                  <div class="touch-column">
+                    <div class="cum-bar {{ direction }}"
+                         style="height: {{ cum_height }}%; background: {{ cum_color }};"
+                         title="{{ tooltip }}">
+                    </div>
+                    <div class="idx">{{ tp.touch_number }}</div>
+                  </div>
+                {% endfor %}
+              </div>
+
+              <div class="reasons">
+                <div class="pos">
+                  <b>Top bullish drivers</b>
+                  <ul>
+                    {% for r in lv.touch_scoring.top_plus %}
+                      <li>{{ r.reason }} ({{ r.count }})</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+                <div class="neg">
+                  <b>Top bearish drivers</b>
+                  <ul>
+                    {% for r in lv.touch_scoring.top_minus %}
+                      <li>{{ r.reason }} ({{ r.count }})</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              </div>
+
+              {% if lv.touch_scoring.notes and lv.touch_scoring.notes|length > 0 %}
+                <p class="muted" style="margin-top: 10px;">
+                  notes:
+                  {% for n in lv.touch_scoring.notes %}
+                    <code>{{ n }}</code>
+                  {% endfor %}
+                </p>
+              {% endif %}
+            </div>
+          {% endif %}
+        {% endfor %}
+
+        <!-- Volume Summary -->
+        <h5 style="margin-top: 16px;">📊 Volume Summary (Consolidation Period)</h5>
+        <table>
+          <thead>
+            <tr>
+              <th>level</th>
+              <th>band volume</th>
+              <th>time in band</th>
+              <th>avg vol/min</th>
+              <th>avg shares/trade</th>
+              <th>large trades</th>
+              <th>large buy</th>
+              <th>large sell</th>
+              <th>large sell %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lv in ch.levels %}
+              {% set sw = lv.session_wide or {} %}
+              {% set band_vol = sw.band_total_volume_sum or 0 %}
+              {% set time_s = sw.time_in_band_s or 1 %}
+              {% set time_min = time_s / 60 %}
+              {% set avg_vol_min = (band_vol / time_min) if time_min > 0 else 0 %}
+              {% set band_trades = sw.band_trade_count_sum or 1 %}
+              {% set avg_shares = (band_vol / band_trades) if band_trades > 0 else 0 %}
+              {% set large_count = sw.band_large_trade_count or 0 %}
+              {% set large_buy = sw.band_large_buy_volume or 0 %}
+              {% set large_sell = sw.band_large_sell_volume or 0 %}
+              {% set large_total = large_buy + large_sell %}
+              {% set sell_pct = ((large_sell / large_total) * 100) if large_total > 0 else 0 %}
+              <tr>
+                <td><code>{{ lv.level_kind }}</code> {% if lv.indicator_name %}{{ lv.indicator_name|upper }}{% else %}{{ lv.level_price }}{% endif %}</td>
+                <td>{{ "{:,.0f}".format(band_vol) }}</td>
+                <td>{{ time_s|int }}s ({{ "%.1f"|format(time_min) }} min)</td>
+                <td><b>{{ "{:,.0f}".format(avg_vol_min) }}</b></td>
+                <td>{{ avg_shares|int }}</td>
+                <td>{{ large_count }}</td>
+                <td style="color: #3fb950;">{{ "{:,.0f}".format(large_buy) }}</td>
+                <td style="color: #f85149;">{{ "{:,.0f}".format(large_sell) }}</td>
+                <td style="{% if sell_pct > 55 %}color: #f85149; font-weight: bold;{% elif sell_pct < 45 %}color: #3fb950; font-weight: bold;{% endif %}">{{ "%.1f"|format(sell_pct) }}%</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <!-- Session-Wide Continuous Tracking for each level -->
+        <h5 style="margin-top: 16px;">Session-Wide Level Tracking (all retests)</h5>
+        <table>
+          <thead>
+            <tr>
+              <th>level</th>
+              <th>session touches</th>
+              <th>session breaks</th>
+              <th>session rejects</th>
+              <th>reclaim attempts</th>
+              <th>role flip</th>
+              <th>session delta</th>
+              <th>session time_in_band</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lv in ch.levels %}
+              <tr>
+                <td><code>{{ lv.level_kind }}</code> {{ lv.level_price }}</td>
+                <td>{% if lv.timeline_summary %}{{ lv.timeline_summary.touches }}{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                <td>{% if lv.timeline_summary %}{{ lv.timeline_summary.breaks }}{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                <td>{% if lv.timeline_summary %}{{ lv.timeline_summary.rejects }}{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                <td>{% if lv.timeline_summary %}{{ lv.timeline_summary.reclaim_attempts }}{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                <td>
+                  {% if lv.role_flip %}
+                    <b style="color: #d29922;">{{ lv.role_flip }}</b>
+                  {% else %}
+                    <span class="muted">no</span>
+                  {% endif %}
+                </td>
+                <td>{% if lv.session_wide %}{{ lv.session_wide.band_delta_sum }}{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                <td>{% if lv.session_wide %}{{ lv.session_wide.time_in_band_s }}s{% else %}<span class="muted">n/a</span>{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <!-- Main Support Scoring -->
+        {% if ch.main_support %}
+          <h5 style="margin-top: 16px;">Main Support Score (Addendum K.5)</h5>
+          <p>
+            <b>Main Support:</b> <code>{{ ch.main_support.main_support_id }}</code> (score: {{ ch.main_support.main_support_score }})
+            {% if ch.main_support.focus_level %}
+              &nbsp;|&nbsp; <b>Focus returns to:</b> <code>{{ ch.main_support.focus_level }}</code>
+            {% endif %}
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>level</th>
+                <th>score</th>
+                <th>hold_rate</th>
+                <th>gap_to_next_atr</th>
+                <th>cluster?</th>
+                <th>focus?</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for lv in ch.levels %}
+                <tr {% if ch.main_support.main_support_id == lv.level_price|string %}style="background: #d4edda;"{% endif %}>
+                  <td><code>{{ lv.level_kind }}</code> {{ lv.level_price }}</td>
+                  <td>{% if ch.main_support.scores %}{{ ch.main_support.scores[lv.level_price|string] }}{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                  <td>{% if lv.historical_hold_rate is not none %}{{ "%.2f"|format(lv.historical_hold_rate) }}{% else %}<span class="muted">n/a</span>{% endif %}</td>
+                  <td>{% if lv.gap_to_next_support_atr is not none %}{{ "%.2f"|format(lv.gap_to_next_support_atr) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+                  <td>{% if lv.support_cluster_flag %}<b style="color: #d29922;">yes</b>{% else %}<span class="muted">no</span>{% endif %}</td>
+                  <td>{% if lv.focus_returns_to_this %}<b style="color: #3fb950;">yes</b>{% else %}<span class="muted">no</span>{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+
+        <!-- Reclaim Packets -->
+        {% if ch.reclaim_packets and ch.reclaim_packets|length > 0 %}
+          <details style="margin-top: 10px; margin-bottom: 10px;">
+            <summary style="cursor: pointer; color: #0b57d0;">
+              <b>Reclaim Packets</b> — {{ ch.reclaim_packets|length }} reclaims detected (click to expand)
+            </summary>
+            <table style="margin-top: 8px;">
+              <thead>
+                <tr>
+                  <th>reclaimed</th>
+                  <th>from_deeper</th>
+                  <th>time_to_reclaim</th>
+                  <th>snapback?</th>
+                  <th>hold_30s?</th>
+                  <th>delta_30s</th>
+                  <th>flush?</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for rp in ch.reclaim_packets %}
+                  <tr>
+                    <td>{{ rp.reclaimed_level_price }}</td>
+                    <td>{{ rp.tagged_deeper_level_price }}</td>
+                    <td>{{ rp.time_to_reclaim_s }}s</td>
+                    <td>{% if rp.snapback_flag %}<b style="color: #3fb950;">yes</b>{% else %}<span class="muted">no</span>{% endif %}</td>
+                    <td>{% if rp.reclaim_hold_30s %}<b style="color: #3fb950;">yes</b>{% else %}<span class="muted">no</span>{% endif %}</td>
+                    <td>{{ rp.reclaim_band_delta_30s }}</td>
+                    <td>{% if rp.flush_flag %}<b style="color: #d29922;">yes</b>{% else %}<span class="muted">no</span>{% endif %}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </details>
+        {% endif %}
+
+        <!-- Touch Packets (collapsible per level) -->
+        {% for lv in ch.levels %}
+          {% if lv.touch_packets and lv.touch_packets|length > 0 %}
+            <details style="margin-top: 10px; margin-bottom: 10px;">
+              <summary style="cursor: pointer; color: #0b57d0;">
+                <b>{{ lv.level_kind }} {{ lv.level_price }}</b> — {{ lv.touch_packets|length }} touch packets (click to expand)
+              </summary>
+              <table style="margin-top: 8px; font-size: 12px;">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>approach</th>
+                    <th>dwell_s</th>
+                    <th>bounce_30s</th>
+                    <th>delta_0_30s</th>
+                    <th>delta_flip?</th>
+                    <th>wick?</th>
+                    <th>outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for tp in lv.touch_packets %}
+                    <tr>
+                      <td>{{ tp.touch_number }}</td>
+                      <td><code>{{ tp.approach_type }}</code></td>
+                      <td>{{ tp.touch_dwell_s }}</td>
+                      <td>{% if tp.bounce_return_30s_pct is not none %}{{ "%.3f"|format(tp.bounce_return_30s_pct) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+                      <td>{{ tp.band_delta_0_30s }}</td>
+                      <td>{% if tp.delta_flip_flag %}<b style="color: #3fb950;">yes</b>{% else %}<span class="muted">no</span>{% endif %}</td>
+                      <td>{% if tp.wick_recovered_flag %}<b style="color: #3fb950;">yes</b>{% else %}<span class="muted">no</span>{% endif %}</td>
+                      <td><code>{{ tp.touch_outcome }}</code></td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </details>
+          {% endif %}
+        {% endfor %}
+
+        <!-- Interaction Timeline (collapsible or summary) -->
+        {% for lv in ch.levels %}
+          {% if lv.interaction_timeline and lv.interaction_timeline|length > 0 %}
+            <details style="margin-top: 10px; margin-bottom: 10px;">
+              <summary style="cursor: pointer; color: #0b57d0;">
+                <b>{{ lv.level_kind }} {{ lv.level_price }}</b> — {{ lv.interaction_timeline|length }} interaction events (click to expand)
+              </summary>
+              <table style="margin-top: 8px;">
+                <thead>
+                  <tr>
+                    <th>ts_ms</th>
+                    <th>event</th>
+                    <th>from_side</th>
+                    <th>to_side</th>
+                    <th>reclaim?</th>
+                    <th>price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for ev in lv.interaction_timeline %}
+                    <tr>
+                      <td>{{ ev.ts_ms|chicago }}</td>
+                      <td><code>{{ ev.event }}</code></td>
+                      <td>{% if ev.from_side %}{{ ev.from_side }}{% else %}<span class="muted">—</span>{% endif %}</td>
+                      <td>{% if ev.to_side %}{{ ev.to_side }}{% else %}<span class="muted">—</span>{% endif %}</td>
+                      <td>{% if ev.reclaim_attempt %}<b style="color: #3fb950;">yes</b>{% else %}<span class="muted">no</span>{% endif %}</td>
+                      <td>{{ ev.price }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </details>
+          {% endif %}
+        {% endfor %}
+
+        <!-- Interpretation Guide (collapsible reference) -->
+        {% if ch.interpretation_guide %}
+          <details style="margin-top: 16px; margin-bottom: 16px; background: #f6f8fa; padding: 10px; border-radius: 6px;">
+            <summary style="cursor: pointer; font-weight: bold; color: #0b57d0;">
+              📖 Interpretation Guide (what the numbers mean)
+            </summary>
+            <div style="margin-top: 12px; font-size: 13px;">
+              
+              <h5 style="margin-top: 8px;">🎯 The Cleanest Signal</h5>
+              <p style="background: #d4edda; padding: 8px; border-radius: 4px; font-family: monospace;">
+                {{ ch.interpretation_guide.cleanest_signal }}
+              </p>
+
+              <h5 style="margin-top: 16px;">📊 Decision Matrix</h5>
+              <table style="font-size: 12px;">
+                <thead>
+                  <tr>
+                    <th>compression</th>
+                    <th>delta_flip</th>
+                    <th>aggr_30s</th>
+                    <th>signal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in ch.interpretation_guide.decision_matrix %}
+                    <tr>
+                      <td><code>{{ row.compression }}</code></td>
+                      <td><code>{{ row.delta_flip }}</code></td>
+                      <td><code>{{ row.aggr_30s }}</code></td>
+                      <td>
+                        {% if 'STRONG' in row.signal %}
+                          <b style="color: #3fb950;">{{ row.signal }}</b>
+                        {% elif 'SKIP' in row.signal %}
+                          <span style="color: #f85149;">{{ row.signal }}</span>
+                        {% else %}
+                          <span style="color: #d29922;">{{ row.signal }}</span>
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+
+              <h5 style="margin-top: 16px;">📋 What to Watch</h5>
+              {% for key, section in ch.interpretation_guide.items() %}
+                {% if section is mapping and section.title %}
+                  <div style="margin-bottom: 12px; padding: 8px; background: white; border-radius: 4px;">
+                    <b>{{ section.title }}</b>
+                    <ul style="margin: 4px 0 4px 20px; padding: 0;">
+                      {% for m in section.metrics %}
+                        <li style="color: #3fb950;">{{ m }}</li>
+                      {% endfor %}
+                      {% if section.red_flag %}
+                        <li style="color: #f85149;">⚠️ Red flag: {{ section.red_flag }}</li>
+                      {% endif %}
+                    </ul>
+                  </div>
+                {% endif %}
+              {% endfor %}
+
+            </div>
+          </details>
+        {% endif %}
+
+      {% endfor %}
+    {% else %}
+      <p class="muted">No level-chain markers found (use the Record page "Levels" section).</p>
+    {% endif %}
+
+    <h3>Move markers (during/post)</h3>
+    {% if report.event_markers and report.event_markers|length > 0 %}
+      <table>
+        <thead>
+          <tr>
+            <th>marker_type</th><th>T (ts_ms)</th>
+            <th>pre_60s delta_sum</th><th>during_30s delta_sum</th><th>post_90s delta_sum</th>
+            <th>pre_60s time_in_band_s</th><th>post_90s reclaim_attempts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in report.event_markers %}
+            <tr>
+              <td><code>{{ e.marker_type }}</code></td>
+              <td>{{ e.ts_ms|chicago }}</td>
+              <td>{{ e.pre_60s.delta_sum }}</td>
+              <td>{{ e.during_30s.delta_sum }}</td>
+              <td>{{ e.post_90s.delta_sum }}</td>
+              <td>{{ e.pre_60s.time_in_band_s }}</td>
+              <td>{{ e.post_90s.reclaim_attempts }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No single-moment markers found.</p>
+    {% endif %}
+  </body>
+</html>
+
+

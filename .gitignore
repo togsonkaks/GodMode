@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Testing
+.pytest_cache/
+.coverage
+coverage.xml
+
+# OS/editor
+.DS_Store
+Thumbs.db
+
+# Local data/output (do not commit)
+data/
+
+# Secrets
+.env
+.env.*
+
+
+
