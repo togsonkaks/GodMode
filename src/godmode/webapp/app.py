@@ -1337,6 +1337,10 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
     _scanner_state: dict[str, Any] = {"day": None, "tickers": {}, "alerts": []}
 
     async def _alpaca_top_gainers(top_n: int) -> list[str]:
+        movers = await _alpaca_top_gainers_movers(top_n)
+        return [str(m["symbol"]).upper() for m in movers if isinstance(m, dict) and m.get("symbol")][: int(top_n)]
+
+    async def _alpaca_top_gainers_movers(top_n: int) -> list[dict[str, Any]]:
         import os
         import httpx
 
@@ -1352,7 +1356,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             r.raise_for_status()
             data = r.json()
         movers = data.get("movers", []) if isinstance(data, dict) else []
-        syms: list[str] = []
+        out: list[dict[str, Any]] = []
         for m in movers:
             if not isinstance(m, dict) or not m.get("symbol"):
                 continue
@@ -1363,8 +1367,46 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                     continue
             except Exception:
                 pass
-            syms.append(str(m["symbol"]).upper())
-        return syms[: int(top_n)]
+            out.append(m)
+        return out[: int(top_n)]
+
+    def _mover_price(m: dict[str, Any]) -> float | None:
+        for k in ("price", "last_price", "last", "close", "current_price"):
+            v = m.get(k)
+            try:
+                if v is not None:
+                    return float(v)
+            except Exception:
+                continue
+        return None
+
+    def _mover_volume(m: dict[str, Any]) -> float | None:
+        for k in ("volume", "trade_volume", "vol"):
+            v = m.get(k)
+            try:
+                if v is not None:
+                    return float(v)
+            except Exception:
+                continue
+        return None
+
+    def _mover_pct_change(m: dict[str, Any]) -> float | None:
+        v = m.get("percent_change", None)
+        try:
+            if v is not None:
+                return float(v) / 100.0
+        except Exception:
+            pass
+        return None
+
+    def _result_payload(r: Any) -> dict[str, Any]:
+        if isinstance(r, dict):
+            return dict(r)
+        d = dict(getattr(r, "__dict__", {}) or {})
+        sigs = d.get("signals") or []
+        if sigs and isinstance(sigs, list):
+            d["signals"] = [s.__dict__ if hasattr(s, "__dict__") else dict(s) for s in sigs]
+        return d
 
     def _ct_now_str() -> str:
         from datetime import datetime
@@ -1406,8 +1448,33 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             _scanner_state["tickers"] = {}
             _scanner_state["alerts"] = []
 
-        tickers = await _alpaca_top_gainers(_scanner_cfg.top_n)
-        results = await _scanner.scan(tickers, now_ms=now_ms) if not paused else []
+        movers = await _alpaca_top_gainers_movers(10)
+        tickers = [str(m.get("symbol")).upper() for m in movers if isinstance(m, dict) and m.get("symbol")]
+
+        # Debug/testing mode: when paused (outside 3am–3pm CT), still show top gainers as candidates.
+        if paused:
+            results: list[dict[str, Any]] = []
+            for m in movers:
+                sym = str(m.get("symbol") or "").upper().strip()
+                if not sym:
+                    continue
+                results.append(
+                    {
+                        "ticker": sym,
+                        "session_open": None,
+                        "session_low": None,
+                        "hod": None,
+                        "last": _mover_price(m),
+                        "pct_up": _mover_pct_change(m),
+                        "pct_off_hod": None,
+                        "volume": _mover_volume(m),
+                        "passes_day_filters": False,
+                        "signals": [],
+                        "debug_source": "alpaca_movers",
+                    }
+                )
+        else:
+            results = await _scanner.scan(tickers, now_ms=now_ms)
 
         tf_order = ["30s", "1m", "2m", "3m", "5m"]
         new_alerts: list[dict[str, Any]] = []
@@ -1477,9 +1544,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         payload = {
             "paused": paused,
             "now_ct": _ct_now_str(),
-            "results": [
-                {**r.__dict__, "signals": [s.__dict__ for s in (r.signals or [])]} for r in results
-            ],
+            "results": [_result_payload(r) for r in results],
             "alerts": _scanner_state["alerts"],
         }
         _scanner_cache["last_run_ms"] = now_ms
