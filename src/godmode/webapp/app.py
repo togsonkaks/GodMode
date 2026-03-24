@@ -1407,6 +1407,48 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             log.exception("yahoo day_gainers fetch failed: %s", e)
             return []
 
+    async def _tradingview_premarket_gainers(top_n: int) -> list[str]:
+        import httpx
+        import re
+
+        url = "https://www.tradingview.com/markets/stocks-usa/market-movers-pre-market-gainers/"
+        headers = {
+            "user-agent": "Mozilla/5.0",
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-language": "en-US,en;q=0.9",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=20.0, headers=headers, follow_redirects=True) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                html = r.text
+        except Exception as e:
+            log.exception("tradingview premarket gainers fetch failed: %s", e)
+            return []
+
+        patterns = [
+            re.compile(r'data-symbol="([A-Z0-9.]{1,12})"'),
+            re.compile(r'/symbols/(?:[A-Z]+-)?([A-Z0-9.]{1,12})/?'),
+            re.compile(r'"symbol"\s*:\s*"([A-Z0-9.]{1,12})"'),
+        ]
+        seen: set[str] = set()
+        out: list[str] = []
+        for pat in patterns:
+            for m in pat.finditer(html):
+                sym = (m.group(1) or "").upper().strip()
+                if not sym:
+                    continue
+                # Keep it conservative to reduce false positives.
+                if len(sym) > 6:
+                    continue
+                if sym in seen:
+                    continue
+                seen.add(sym)
+                out.append(sym)
+                if len(out) >= int(top_n):
+                    return out
+        return out[: int(top_n)]
+
         try:
             res = data.get("finance", {}).get("result", [])
             if not res:
@@ -1553,12 +1595,19 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             _scanner_state["tickers"] = {}
             _scanner_state["alerts"] = []
 
-        movers = await _alpaca_top_gainers_movers(10)
-        debug_source = "alpaca_movers"
-        if not movers:
-            movers = await _yahoo_day_gainers(10)
-            debug_source = "yahoo_day_gainers" if movers else "none"
-        tickers = [str(m.get("symbol")).upper() for m in movers if isinstance(m, dict) and m.get("symbol")]
+        # Pick a top list. We prefer TradingView premarket gainers for "what you see" testing.
+        tv = await _tradingview_premarket_gainers(10)
+        if tv:
+            tickers = tv
+            movers: list[dict[str, Any]] = [{"symbol": t} for t in tv]
+            debug_source = "tradingview_premarket_gainers"
+        else:
+            movers = await _alpaca_top_gainers_movers(10)
+            debug_source = "alpaca_movers"
+            if not movers:
+                movers = await _yahoo_day_gainers(10)
+                debug_source = "yahoo_day_gainers" if movers else "none"
+            tickers = [str(m.get("symbol")).upper() for m in movers if isinstance(m, dict) and m.get("symbol")]
 
         scan_results = await _scanner.scan(tickers, now_ms=now_ms) if (not paused) else []
         results_for_output: list[Any] = scan_results
