@@ -88,8 +88,9 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 s["brief"] = None
                 s["has_report"] = False
         return templates.TemplateResponse(
-            name="home.html",
-            context={
+            request,
+            "home.html",
+            {
                 "request": request,
                 "sessions": sessions,
                 "root_dir": str(cfg.storage.root_dir),
@@ -99,30 +100,31 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
     @app.get("/record", response_class=HTMLResponse)
     def record_page(request: Request) -> HTMLResponse:
         """Record form page (Addendum J1)."""
-        return templates.TemplateResponse(name="record.html", context={"request": request})
+        return templates.TemplateResponse(request, "record.html", {"request": request})
 
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs_page(request: Request) -> HTMLResponse:
         """Jobs status page with polling (Addendum J5)."""
         jobs = job_manager.list_jobs()
-        return templates.TemplateResponse(name="jobs.html", context={"request": request, "jobs": jobs})
+        return templates.TemplateResponse(request, "jobs.html", {"request": request, "jobs": jobs})
 
     @app.get("/live", response_class=HTMLResponse)
     def live_dashboard(request: Request) -> HTMLResponse:
         """Live dashboard - multi-ticker real-time monitoring."""
-        return templates.TemplateResponse(name="live_dashboard.html", context={"request": request})
+        return templates.TemplateResponse(request, "live_dashboard.html", {"request": request})
 
     @app.get("/zones", response_class=HTMLResponse)
     def zones_page(request: Request) -> HTMLResponse:
         """Zone picker + analysis page (single-zone v1)."""
-        return templates.TemplateResponse(name="zones.html", context={"request": request})
+        return templates.TemplateResponse(request, "zones.html", {"request": request})
 
     @app.get("/scanner", response_class=HTMLResponse)
     def scanner_page(request: Request) -> HTMLResponse:
         """Downtrend-break scanner page."""
         return templates.TemplateResponse(
-            name="scanner.html",
-            context={"request": request, "refresh_seconds": 5, "top_n": 12},
+            request,
+            "scanner.html",
+            {"request": request, "refresh_seconds": 5, "top_n": 12},
         )
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
@@ -134,13 +136,14 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             return RedirectResponse(url="/jobs", status_code=302)
         
         jobs = [job]  # Show just this job
-        return templates.TemplateResponse("jobs.html", {"request": request, "jobs": jobs, "highlight_job": job_id})
+        return templates.TemplateResponse(request, "jobs.html", {"request": request, "jobs": jobs, "highlight_job": job_id})
 
     @app.get("/sessions/{date}/{ticker}/{session_id}", response_class=HTMLResponse)
     def session_detail(request: Request, date: str, ticker: str, session_id: str) -> HTMLResponse:
         eps = store.read_episodes(date=date, ticker=ticker, session_id=session_id)
         markers = store.read_markers(date=date, ticker=ticker, session_id=session_id)
         return templates.TemplateResponse(
+            request,
             "session.html",
             {
                 "request": request,
@@ -175,6 +178,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                     pass
         
         return templates.TemplateResponse(
+            request,
             "report.html",
             {
                 "request": request,
@@ -207,6 +211,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 break
         
         return templates.TemplateResponse(
+            request,
             "live.html",
             {
                 "request": request,
@@ -266,6 +271,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 })
         
         return templates.TemplateResponse(
+            request,
             "edit_session.html",
             {
                 "request": request,
@@ -306,6 +312,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 })
         
         return templates.TemplateResponse(
+            request,
             "edit_session.html",
             {
                 "request": request,
@@ -984,6 +991,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         snaps = store.read_snapshots_for_episode(date=date, ticker=ticker, session_id=session_id, episode_id=episode_id)
         tf = store.read_tf_indicators_for_episode(date=date, ticker=ticker, session_id=session_id, episode_id=episode_id)
         return templates.TemplateResponse(
+            request,
             "episode.html",
             {
                 "request": request,
