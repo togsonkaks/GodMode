@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +50,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
 
     app = FastAPI(title="GodMode UI", version="0.1.0")
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+    log = logging.getLogger("godmode.webapp")
 
     # Custom Jinja filter for Chicago timezone
     from datetime import datetime, timezone as dt_timezone
@@ -1351,10 +1353,14 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         url = "https://data.alpaca.markets/v1beta1/screener/stocks/movers"
         headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret}
         params = {"top": int(top_n)}
-        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-            r = await client.get(url, params=params)
-            r.raise_for_status()
-            data = r.json()
+        try:
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+                r = await client.get(url, params=params)
+                r.raise_for_status()
+                data = r.json()
+        except Exception as e:
+            log.exception("alpaca movers fetch failed: %s", e)
+            return []
         movers: Any = data.get("movers", []) if isinstance(data, dict) else []
         # Alpaca has returned different shapes over time:
         # - {"movers": [ ... ]}
@@ -1375,6 +1381,46 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             out.append(m)
         return out[: int(top_n)]
 
+    async def _yahoo_day_gainers(top_n: int) -> list[dict[str, Any]]:
+        import httpx
+
+        # Public Yahoo endpoint used by their web clients. Best-effort fallback only.
+        url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+        params = {
+            "formatted": "true",
+            "lang": "en-US",
+            "region": "US",
+            "scrIds": "day_gainers",
+            "count": str(int(top_n)),
+            "start": "0",
+        }
+        headers = {
+            "user-agent": "Mozilla/5.0",
+            "accept": "application/json,text/plain,*/*",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+                r = await client.get(url, params=params)
+                r.raise_for_status()
+                data = r.json()
+        except Exception as e:
+            log.exception("yahoo day_gainers fetch failed: %s", e)
+            return []
+
+        try:
+            res = data.get("finance", {}).get("result", [])
+            if not res:
+                return []
+            quotes = res[0].get("quotes", []) or []
+            out: list[dict[str, Any]] = []
+            for q in quotes:
+                if isinstance(q, dict) and q.get("symbol"):
+                    out.append(q)
+            return out[: int(top_n)]
+        except Exception as e:
+            log.exception("yahoo day_gainers parse failed: %s", e)
+            return []
+
     def _mover_price(m: dict[str, Any]) -> float | None:
         for k in ("price", "last_price", "last", "close", "current_price"):
             v = m.get(k)
@@ -1383,6 +1429,15 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                     return float(v)
             except Exception:
                 continue
+        # Yahoo shape
+        v = m.get("regularMarketPrice", None)
+        try:
+            if isinstance(v, dict) and v.get("raw") is not None:
+                return float(v["raw"])
+            if v is not None:
+                return float(v)
+        except Exception:
+            pass
         return None
 
     def _mover_volume(m: dict[str, Any]) -> float | None:
@@ -1393,11 +1448,27 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                     return float(v)
             except Exception:
                 continue
+        v = m.get("regularMarketVolume", None)
+        try:
+            if isinstance(v, dict) and v.get("raw") is not None:
+                return float(v["raw"])
+            if v is not None:
+                return float(v)
+        except Exception:
+            pass
         return None
 
     def _mover_pct_change(m: dict[str, Any]) -> float | None:
         v = m.get("percent_change", None)
         try:
+            if v is not None:
+                return float(v) / 100.0
+        except Exception:
+            pass
+        v = m.get("regularMarketChangePercent", None)
+        try:
+            if isinstance(v, dict) and v.get("raw") is not None:
+                return float(v["raw"]) / 100.0
             if v is not None:
                 return float(v) / 100.0
         except Exception:
@@ -1477,6 +1548,10 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             _scanner_state["alerts"] = []
 
         movers = await _alpaca_top_gainers_movers(10)
+        debug_source = "alpaca_movers"
+        if not movers:
+            movers = await _yahoo_day_gainers(10)
+            debug_source = "yahoo_day_gainers" if movers else "none"
         tickers = [str(m.get("symbol")).upper() for m in movers if isinstance(m, dict) and m.get("symbol")]
 
         scan_results = await _scanner.scan(tickers, now_ms=now_ms) if (not paused) else []
@@ -1485,6 +1560,8 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         # Temporary testing behavior: always show something in Candidates if no symbol passes filters yet.
         if not results_for_output:
             results_for_output = _movers_as_results(movers)
+            for r in results_for_output:
+                r["debug_source"] = debug_source
 
         tf_order = ["30s", "1m", "2m", "3m", "5m"]
         new_alerts: list[dict[str, Any]] = []
@@ -1556,6 +1633,11 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             "now_ct": _ct_now_str(),
             "results": [_result_payload(r) for r in results_for_output],
             "alerts": _scanner_state["alerts"],
+            "debug": {
+                "source": debug_source,
+                "tickers_count": len(tickers),
+                "movers_count": len(movers),
+            },
         }
         _scanner_cache["last_run_ms"] = now_ms
         _scanner_cache["payload"] = payload
