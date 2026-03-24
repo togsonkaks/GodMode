@@ -1355,7 +1355,12 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             r = await client.get(url, params=params)
             r.raise_for_status()
             data = r.json()
-        movers = data.get("movers", []) if isinstance(data, dict) else []
+        movers: Any = data.get("movers", []) if isinstance(data, dict) else []
+        # Alpaca has returned different shapes over time:
+        # - {"movers": [ ... ]}
+        # - {"movers": {"gainers": [ ... ], "losers": [ ... ]}}
+        if isinstance(movers, dict):
+            movers = movers.get("gainers") or []
         out: list[dict[str, Any]] = []
         for m in movers:
             if not isinstance(m, dict) or not m.get("symbol"):
@@ -1408,6 +1413,29 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             d["signals"] = [s.__dict__ if hasattr(s, "__dict__") else dict(s) for s in sigs]
         return d
 
+    def _movers_as_results(movers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for m in movers:
+            sym = str(m.get("symbol") or "").upper().strip()
+            if not sym:
+                continue
+            results.append(
+                {
+                    "ticker": sym,
+                    "session_open": None,
+                    "session_low": None,
+                    "hod": None,
+                    "last": _mover_price(m),
+                    "pct_up": _mover_pct_change(m),
+                    "pct_off_hod": None,
+                    "volume": _mover_volume(m),
+                    "passes_day_filters": False,
+                    "signals": [],
+                    "debug_source": "alpaca_movers",
+                }
+            )
+        return results
+
     def _ct_now_str() -> str:
         from datetime import datetime
 
@@ -1451,35 +1479,17 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         movers = await _alpaca_top_gainers_movers(10)
         tickers = [str(m.get("symbol")).upper() for m in movers if isinstance(m, dict) and m.get("symbol")]
 
-        # Debug/testing mode: when paused (outside 3am–3pm CT), still show top gainers as candidates.
-        if paused:
-            results: list[dict[str, Any]] = []
-            for m in movers:
-                sym = str(m.get("symbol") or "").upper().strip()
-                if not sym:
-                    continue
-                results.append(
-                    {
-                        "ticker": sym,
-                        "session_open": None,
-                        "session_low": None,
-                        "hod": None,
-                        "last": _mover_price(m),
-                        "pct_up": _mover_pct_change(m),
-                        "pct_off_hod": None,
-                        "volume": _mover_volume(m),
-                        "passes_day_filters": False,
-                        "signals": [],
-                        "debug_source": "alpaca_movers",
-                    }
-                )
-        else:
-            results = await _scanner.scan(tickers, now_ms=now_ms)
+        scan_results = await _scanner.scan(tickers, now_ms=now_ms) if (not paused) else []
+        results_for_output: list[Any] = scan_results
+
+        # Temporary testing behavior: always show something in Candidates if no symbol passes filters yet.
+        if not results_for_output:
+            results_for_output = _movers_as_results(movers)
 
         tf_order = ["30s", "1m", "2m", "3m", "5m"]
         new_alerts: list[dict[str, Any]] = []
 
-        for r in results:
+        for r in scan_results:
             t = r.ticker
             st = _scanner_state["tickers"].setdefault(
                 t,
@@ -1544,7 +1554,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         payload = {
             "paused": paused,
             "now_ct": _ct_now_str(),
-            "results": [_result_payload(r) for r in results],
+            "results": [_result_payload(r) for r in results_for_output],
             "alerts": _scanner_state["alerts"],
         }
         _scanner_cache["last_run_ms"] = now_ms
