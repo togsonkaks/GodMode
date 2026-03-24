@@ -1381,87 +1381,29 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             out.append(m)
         return out[: int(top_n)]
 
-    async def _yahoo_day_gainers(top_n: int) -> list[dict[str, Any]]:
-        import httpx
-
-        # Public Yahoo endpoint used by their web clients. Best-effort fallback only.
-        url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
-        params = {
-            "formatted": "true",
-            "lang": "en-US",
-            "region": "US",
-            "scrIds": "day_gainers",
-            "count": str(int(top_n)),
-            "start": "0",
-        }
-        headers = {
-            "user-agent": "Mozilla/5.0",
-            "accept": "application/json,text/plain,*/*",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-                r = await client.get(url, params=params)
-                r.raise_for_status()
-                data = r.json()
-        except Exception as e:
-            log.exception("yahoo day_gainers fetch failed: %s", e)
-            return []
-
-    async def _tradingview_premarket_gainers(top_n: int) -> list[str]:
-        import httpx
+    def _parse_watchlist_csv(raw: str) -> list[str]:
         import re
 
-        url = "https://www.tradingview.com/markets/stocks-usa/market-movers-pre-market-gainers/"
-        headers = {
-            "user-agent": "Mozilla/5.0",
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "accept-language": "en-US,en;q=0.9",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=20.0, headers=headers, follow_redirects=True) as client:
-                r = await client.get(url)
-                r.raise_for_status()
-                html = r.text
-        except Exception as e:
-            log.exception("tradingview premarket gainers fetch failed: %s", e)
-            return []
-
-        patterns = [
-            re.compile(r'data-symbol="([A-Z0-9.]{1,12})"'),
-            re.compile(r'/symbols/(?:[A-Z]+-)?([A-Z0-9.]{1,12})/?'),
-            re.compile(r'"symbol"\s*:\s*"([A-Z0-9.]{1,12})"'),
-        ]
-        seen: set[str] = set()
+        # Accept only US-style tickers to avoid Alpaca bars 400s (e.g. NI225).
+        pat = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
         out: list[str] = []
-        for pat in patterns:
-            for m in pat.finditer(html):
-                sym = (m.group(1) or "").upper().strip()
-                if not sym:
-                    continue
-                # Keep it conservative to reduce false positives.
-                if len(sym) > 6:
-                    continue
-                if sym in seen:
-                    continue
-                seen.add(sym)
-                out.append(sym)
-                if len(out) >= int(top_n):
-                    return out
-        return out[: int(top_n)]
+        for part in (raw or "").replace("\n", ",").split(","):
+            t = part.strip().upper()
+            if not t:
+                continue
+            if not pat.match(t):
+                continue
+            out.append(t)
 
-        try:
-            res = data.get("finance", {}).get("result", [])
-            if not res:
-                return []
-            quotes = res[0].get("quotes", []) or []
-            out: list[dict[str, Any]] = []
-            for q in quotes:
-                if isinstance(q, dict) and q.get("symbol"):
-                    out.append(q)
-            return out[: int(top_n)]
-        except Exception as e:
-            log.exception("yahoo day_gainers parse failed: %s", e)
-            return []
+        # De-dupe preserving order.
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for t in out:
+            if t in seen:
+                continue
+            seen.add(t)
+            uniq.append(t)
+        return uniq
 
     def _mover_price(m: dict[str, Any]) -> float | None:
         for k in ("price", "last_price", "last", "close", "current_price"):
@@ -1574,7 +1516,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         return float(local.hour) + float(local.minute) / 60.0
 
     @app.get("/api/scanner")
-    async def api_scanner() -> JSONResponse:
+    async def api_scanner(watch: str = "") -> JSONResponse:
         import time
 
         hm = _ct_hm()
@@ -1595,28 +1537,31 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             _scanner_state["tickers"] = {}
             _scanner_state["alerts"] = []
 
-        # Pick a top list. We prefer TradingView premarket gainers for "what you see" testing.
-        tv = await _tradingview_premarket_gainers(10)
-        if tv:
-            tickers = tv
-            movers: list[dict[str, Any]] = [{"symbol": t} for t in tv]
-            debug_source = "tradingview_premarket_gainers"
-        else:
-            movers = await _alpaca_top_gainers_movers(10)
-            debug_source = "alpaca_movers"
-            if not movers:
-                movers = await _yahoo_day_gainers(10)
-                debug_source = "yahoo_day_gainers" if movers else "none"
-            tickers = [str(m.get("symbol")).upper() for m in movers if isinstance(m, dict) and m.get("symbol")]
+        import os
 
-        scan_results = await _scanner.scan(tickers, now_ms=now_ms) if (not paused) else []
+        movers = await _alpaca_top_gainers_movers(10)
+        movers_tickers = _parse_watchlist_csv(
+            ",".join([str(m.get("symbol") or "") for m in movers if isinstance(m, dict)])
+        )
+
+        watch_from_query = _parse_watchlist_csv(watch)
+        watch_from_env = _parse_watchlist_csv(os.environ.get("SCANNER_WATCHLIST", ""))
+
+        tickers: list[str] = []
+        for t in (watch_from_query + watch_from_env + movers_tickers):
+            if t not in tickers:
+                tickers.append(t)
+
+        debug_source = "watchlist+movers" if tickers else "none"
+
+        scan_results = await _scanner.scan(tickers, now_ms=now_ms) if (tickers and not paused) else []
         results_for_output: list[Any] = scan_results
 
-        # Temporary testing behavior: always show something in Candidates if no symbol passes filters yet.
-        if not results_for_output:
-            results_for_output = _movers_as_results(movers)
+        # If nothing passes filters yet, still show the selected tickers list (no conditions).
+        if not results_for_output and tickers:
+            results_for_output = _movers_as_results([{"symbol": t} for t in tickers])
             for r in results_for_output:
-                r["debug_source"] = debug_source
+                r["debug_source"] = "watchlist" if r.get("ticker") in (watch_from_query + watch_from_env) else "alpaca_movers"
 
         tf_order = ["30s", "1m", "2m", "3m", "5m"]
         new_alerts: list[dict[str, Any]] = []
@@ -1692,6 +1637,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 "source": debug_source,
                 "tickers_count": len(tickers),
                 "movers_count": len(movers),
+                "watch_count": len(watch_from_query + watch_from_env),
             },
         }
         _scanner_cache["last_run_ms"] = now_ms
