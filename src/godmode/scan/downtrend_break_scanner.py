@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+import logging
 from typing import Any, Literal
 
 import pandas as pd
@@ -227,6 +228,7 @@ class DowntrendBreakScanner:
     def __init__(self, *, cfg: ScannerConfig) -> None:
         self._cfg = cfg
         self._provider = AlpacaProvider.from_env()
+        self._log = logging.getLogger("godmode.scan.downtrend_break_scanner")
 
     async def aclose(self) -> None:
         await self._provider.aclose()
@@ -249,7 +251,25 @@ class DowntrendBreakScanner:
 
         for t in tickers:
             t = t.upper().strip()
-            bars_rows = await self._provider.getBars(t, start_ms, end_ms, timeframe="1Min")
+            try:
+                bars_rows = await self._provider.getBars(t, start_ms, end_ms, timeframe="1Min")
+            except Exception as e:
+                self._log.warning("getBars failed ticker=%s err=%r", t, e)
+                out.append(
+                    TickerScanResult(
+                        ticker=t,
+                        session_open=None,
+                        session_low=None,
+                        hod=None,
+                        last=None,
+                        pct_up=None,
+                        pct_off_hod=None,
+                        volume=None,
+                        passes_day_filters=False,
+                        signals=[],
+                    )
+                )
+                continue
             bars_1m_day = pd.DataFrame(bars_rows) if bars_rows else pd.DataFrame()
             stats = None
             if not bars_1m_day.empty:
@@ -299,12 +319,20 @@ class DowntrendBreakScanner:
             tf_signals: list[TimeframeSignal] = []
             if passes_day:
                 # Use bars for 1m and resample for higher TFs. Use trades only for 30s.
-                bars_recent_rows = await self._provider.getBars(t, recent_start_ms, end_ms, timeframe="1Min")
+                try:
+                    bars_recent_rows = await self._provider.getBars(t, recent_start_ms, end_ms, timeframe="1Min")
+                except Exception as e:
+                    self._log.warning("getBars(recent) failed ticker=%s err=%r", t, e)
+                    bars_recent_rows = []
                 bars_1m = pd.DataFrame(bars_recent_rows) if bars_recent_rows else pd.DataFrame()
                 if not bars_1m.empty:
                     bars_1m = bars_1m.sort_values(["ts_ms"], kind="mergesort").reset_index(drop=True)
 
-                trades_recent = await self._provider.getTrades(t, recent_start_ms, end_ms)
+                try:
+                    trades_recent = await self._provider.getTrades(t, recent_start_ms, end_ms)
+                except Exception as e:
+                    self._log.warning("getTrades failed ticker=%s err=%r", t, e)
+                    trades_recent = []
                 bars_30s = _to_bar_df_from_trades(trades_recent, symbol=t, bucket_seconds=30)
                 bars_2m = _resample_bars(bars_1m, minutes=2) if not bars_1m.empty else pd.DataFrame()
                 bars_3m = _resample_bars(bars_1m, minutes=3) if not bars_1m.empty else pd.DataFrame()

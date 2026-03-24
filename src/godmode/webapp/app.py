@@ -1381,6 +1381,36 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             out.append(m)
         return out[: int(top_n)]
 
+    async def _alpaca_most_actives(top_n: int, *, by: str = "volume") -> list[dict[str, Any]]:
+        import os
+        import httpx
+
+        api_key = os.environ.get("ALPACA_API_KEY", "")
+        api_secret = os.environ.get("ALPACA_SECRET_KEY", "")
+        if not api_key or not api_secret:
+            return []
+        url = "https://data.alpaca.markets/v1beta1/screener/stocks/most-actives"
+        headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret}
+        params = {"top": int(top_n), "by": by}
+        try:
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+                r = await client.get(url, params=params)
+                r.raise_for_status()
+                data = r.json()
+        except Exception as e:
+            log.exception("alpaca most-actives fetch failed: %s", e)
+            return []
+
+        # Response shape: {"most_actives": [{"symbol": "...", ...}, ...]}
+        items: Any = data.get("most_actives", []) if isinstance(data, dict) else []
+        if not isinstance(items, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for it in items:
+            if isinstance(it, dict) and it.get("symbol"):
+                out.append(it)
+        return out[: int(top_n)]
+
     def _parse_watchlist_csv(raw: str) -> list[str]:
         import re
 
@@ -1540,19 +1570,20 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         import os
 
         movers = await _alpaca_top_gainers_movers(10)
-        movers_tickers = _parse_watchlist_csv(
-            ",".join([str(m.get("symbol") or "") for m in movers if isinstance(m, dict)])
-        )
+        movers_tickers = _parse_watchlist_csv(",".join([str(m.get("symbol") or "") for m in movers if isinstance(m, dict)]))
+
+        actives = await _alpaca_most_actives(20, by="volume")
+        actives_tickers = _parse_watchlist_csv(",".join([str(m.get("symbol") or "") for m in actives if isinstance(m, dict)]))
 
         watch_from_query = _parse_watchlist_csv(watch)
         watch_from_env = _parse_watchlist_csv(os.environ.get("SCANNER_WATCHLIST", ""))
 
         tickers: list[str] = []
-        for t in (watch_from_query + watch_from_env + movers_tickers):
+        for t in (watch_from_query + watch_from_env + actives_tickers + movers_tickers):
             if t not in tickers:
                 tickers.append(t)
 
-        debug_source = "watchlist+movers" if tickers else "none"
+        debug_source = "watchlist+actives+movers" if tickers else "none"
 
         scan_results = await _scanner.scan(tickers, now_ms=now_ms) if (tickers and not paused) else []
         results_for_output: list[Any] = scan_results
@@ -1638,6 +1669,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 "tickers_count": len(tickers),
                 "movers_count": len(movers),
                 "watch_count": len(watch_from_query + watch_from_env),
+                "actives_count": len(actives),
             },
         }
         _scanner_cache["last_run_ms"] = now_ms
