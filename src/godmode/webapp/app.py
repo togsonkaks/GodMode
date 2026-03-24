@@ -1367,28 +1367,21 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         return syms[: int(top_n)]
 
     def _ct_now_str() -> str:
-        from datetime import datetime, timezone
-        import pytz
+        from datetime import datetime
 
-        dt = datetime.now(tz=timezone.utc)
-        chicago = pytz.timezone("America/Chicago")
-        return dt.astimezone(chicago).strftime("%Y-%m-%d %H:%M:%S CT")
+        dt = datetime.now(tz=ZoneInfo("America/Chicago"))
+        return dt.strftime("%Y-%m-%d %H:%M:%S CT")
 
     def _ct_day_key() -> str:
-        from datetime import datetime, timezone
-        import pytz
+        from datetime import datetime
 
-        dt = datetime.now(tz=timezone.utc)
-        chicago = pytz.timezone("America/Chicago")
-        return dt.astimezone(chicago).strftime("%Y-%m-%d")
+        dt = datetime.now(tz=ZoneInfo("America/Chicago"))
+        return dt.strftime("%Y-%m-%d")
 
     def _ct_hm() -> float:
-        from datetime import datetime, timezone
-        import pytz
+        from datetime import datetime
 
-        dt = datetime.now(tz=timezone.utc)
-        chicago = pytz.timezone("America/Chicago")
-        local = dt.astimezone(chicago)
+        local = datetime.now(tz=ZoneInfo("America/Chicago"))
         return float(local.hour) + float(local.minute) / 60.0
 
     @app.get("/api/scanner")
