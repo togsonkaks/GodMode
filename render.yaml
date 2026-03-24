@@ -7,16 +7,17 @@ services:
     startCommand: python -m godmode.cli.main web --config config/clean_run.yaml --host 0.0.0.0 --port $PORT
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: ALPACA_API_KEY
         sync: false
       - key: ALPACA_SECRET_KEY
         sync: false
       - key: ALPACA_FEED
-        value: sip
+        value: iex
       - key: EXPO_PUSH_TOKENS
         sync: false
       - key: SCANNER_ENABLED
         value: "1"
       - key: SCANNER_INTERVAL_SECONDS
         value: "840" # 14 minutes
-

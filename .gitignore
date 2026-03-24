@@ -26,5 +26,8 @@ data/
 .env
 .env.*
 
+# Local experiments / clones
+external/
+
 
 
