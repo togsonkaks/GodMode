@@ -1659,10 +1659,40 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         if new_alerts:
             _scanner_state["alerts"] = (new_alerts + _scanner_state["alerts"])[:200]
 
+        results_payload = [_result_payload(r) for r in results_for_output]
+        for rr in results_payload:
+            try:
+                if rr.get("passes_day_filters") is True:
+                    rr["day_filter_notes"] = ["PASS"]
+                    continue
+                notes: list[str] = []
+                pct_up = rr.get("pct_up")
+                pct_off = rr.get("pct_off_hod")
+                vol = rr.get("volume")
+
+                if pct_up is None:
+                    notes.append("Missing HOD/open to compute % up")
+                elif float(pct_up) < float(_scanner_cfg.min_up_pct):
+                    notes.append(f"Up {float(pct_up)*100:.1f}% < {float(_scanner_cfg.min_up_pct)*100:.0f}%")
+
+                if pct_off is None:
+                    notes.append("Missing HOD/last to compute % off HOD")
+                elif float(pct_off) < float(_scanner_cfg.min_off_hod_pct):
+                    notes.append(f"Off HOD {float(pct_off)*100:.1f}% < {float(_scanner_cfg.min_off_hod_pct)*100:.0f}%")
+
+                if vol is None:
+                    notes.append("Missing volume")
+                elif float(vol) < float(_scanner_cfg.min_volume):
+                    notes.append(f"Vol {float(vol):,.0f} < {float(_scanner_cfg.min_volume):,.0f}")
+
+                rr["day_filter_notes"] = notes or ["Did not pass day filters"]
+            except Exception:
+                rr["day_filter_notes"] = ["Did not pass day filters"]
+
         payload = {
             "paused": paused,
             "now_ct": _ct_now_str(),
-            "results": [_result_payload(r) for r in results_for_output],
+            "results": results_payload,
             "alerts": _scanner_state["alerts"],
             "debug": {
                 "source": debug_source,
@@ -1670,6 +1700,11 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 "movers_count": len(movers),
                 "watch_count": len(watch_from_query + watch_from_env),
                 "actives_count": len(actives),
+                "day_filters": {
+                    "min_up_pct": float(_scanner_cfg.min_up_pct),
+                    "min_off_hod_pct": float(_scanner_cfg.min_off_hod_pct),
+                    "min_volume": float(_scanner_cfg.min_volume),
+                },
             },
         }
         _scanner_cache["last_run_ms"] = now_ms
