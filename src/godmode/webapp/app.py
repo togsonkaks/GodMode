@@ -1,6 +1,7 @@
 """FastAPI web application for GodMode visualization + orchestration."""
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -17,6 +18,18 @@ from godmode.webapp.store import Store
 from godmode.reports.paths import ReportKey, report_path
 from godmode.reports.reader import load_report_json, summarize_report_brief
 from godmode.reports.writer import write_session_report
+
+
+def _alpaca_feed() -> str:
+    """Choose Alpaca feed for REST endpoints.
+
+    Default to IEX unless explicitly set. Many Alpaca accounts are IEX-only; hardcoding
+    SIP causes 403s and makes live pages (and derived summaries) appear broken.
+    """
+    import os
+
+    f = (os.environ.get("ALPACA_FEED") or "").strip().lower()
+    return f if f in {"iex", "sip"} else "iex"
 
 
 def _parse_local_datetime_to_utc_ms(dt_str: str, tz_name: str) -> int:
@@ -93,6 +106,24 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         jobs = job_manager.list_jobs()
         return templates.TemplateResponse("jobs.html", {"request": request, "jobs": jobs})
 
+    @app.get("/live", response_class=HTMLResponse)
+    def live_dashboard(request: Request) -> HTMLResponse:
+        """Live dashboard - multi-ticker real-time monitoring."""
+        return templates.TemplateResponse("live_dashboard.html", {"request": request})
+
+    @app.get("/zones", response_class=HTMLResponse)
+    def zones_page(request: Request) -> HTMLResponse:
+        """Zone picker + analysis page (single-zone v1)."""
+        return templates.TemplateResponse("zones.html", {"request": request})
+
+    @app.get("/scanner", response_class=HTMLResponse)
+    def scanner_page(request: Request) -> HTMLResponse:
+        """Downtrend-break scanner page."""
+        return templates.TemplateResponse(
+            "scanner.html",
+            {"request": request, "refresh_seconds": 5, "top_n": 12},
+        )
+
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
     def job_detail_page(request: Request, job_id: str) -> HTMLResponse:
         """Single job detail page - shows job status and redirects when complete."""
@@ -122,19 +153,26 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
 
     @app.get("/sessions/{date}/{ticker}/{session_id}/report", response_class=HTMLResponse)
     def session_report(request: Request, date: str, ticker: str, session_id: str) -> HTMLResponse:
-        # Prefer persisted report.json (stable for later comparisons). Fallback to compute on the fly.
-        rp = report_path(root_dir=Path(cfg.storage.root_dir), key=ReportKey(date=date, ticker=ticker, session_id=session_id))
-        if rp.exists():
-            import json
-
-            report = json.loads(rp.read_text(encoding="utf-8"))
-        else:
+        # For LIVE sessions, always compute fresh (no cache)
+        is_live = "_LIVE" in session_id
+        
+        if is_live:
+            # Always compute fresh for live sessions
             report = store.compute_session_report(date=date, ticker=ticker, session_id=session_id)
-            # Best-effort persist for consistency.
-            try:
-                write_session_report(root_dir=Path(cfg.storage.root_dir), ticker=ticker, session_id=session_id)
-            except Exception:
-                pass
+        else:
+            # Prefer persisted report.json (stable for later comparisons). Fallback to compute on the fly.
+            rp = report_path(root_dir=Path(cfg.storage.root_dir), key=ReportKey(date=date, ticker=ticker, session_id=session_id))
+            if rp.exists():
+                import json
+                report = json.loads(rp.read_text(encoding="utf-8"))
+            else:
+                report = store.compute_session_report(date=date, ticker=ticker, session_id=session_id)
+                # Best-effort persist for consistency.
+                try:
+                    write_session_report(root_dir=Path(cfg.storage.root_dir), ticker=ticker, session_id=session_id)
+                except Exception:
+                    pass
+        
         return templates.TemplateResponse(
             "report.html",
             {
@@ -143,6 +181,41 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 "ticker": ticker,
                 "session_id": session_id,
                 "report": report,
+                "now": int(time.time() * 1000),  # For live mode timestamp display
+            },
+        )
+
+    @app.get("/sessions/{date}/{ticker}/{session_id}/live", response_class=HTMLResponse)
+    def session_live(request: Request, date: str, ticker: str, session_id: str) -> HTMLResponse:
+        """Simplified live view - just state panel and dot chart."""
+        # Always compute fresh for live view
+        report = store.compute_session_report(date=date, ticker=ticker, session_id=session_id)
+        
+        # Extract the first level data for display
+        level_data = None
+        level_price = 0.0
+        level_kind = "support"
+        
+        for chain in report.get("level_chains", []):
+            for lv in chain.get("levels", []):
+                level_data = lv
+                level_price = lv.get("level_price", 0)
+                level_kind = lv.get("level_kind", "support")
+                break
+            if level_data:
+                break
+        
+        return templates.TemplateResponse(
+            "live.html",
+            {
+                "request": request,
+                "date": date,
+                "ticker": ticker,
+                "session_id": session_id,
+                "level_data": level_data,
+                "level_price": level_price,
+                "level_kind": level_kind,
+                "now": int(time.time() * 1000),
             },
         )
 
@@ -981,7 +1054,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
                 "start": start_str,
                 "end": end_str,
                 "timeframe": "1Min",
-                "feed": "sip",
+                "feed": _alpaca_feed(),
                 "limit": 1,
             }
             headers = {
@@ -1033,18 +1106,10 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         import os
         import httpx
         from datetime import timedelta
+        import pandas as pd
         
         try:
-            # Map timeframe to Alpaca format
-            tf_map = {
-                "30s": "30Sec",
-                "1m": "1Min",
-                "2m": "2Min",
-                "3m": "3Min",
-            }
-            alpaca_tf = tf_map.get(timeframe, "1Min")
-            
-            # Get 1 week of data
+            # Get 1 week of data (30s is special-cased below)
             now = datetime.now(ZoneInfo("UTC"))
             end_dt = now
             start_dt = now - timedelta(days=7)
@@ -1058,80 +1123,164 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             
             if not api_key or not secret_key:
                 return JSONResponse({"error": "Alpaca API keys not configured"})
-            
-            # Fetch bars from Alpaca
+
+            headers = {
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": secret_key,
+            }
+
+            # ---------------------------------------------------------
+            # 30s candles: Alpaca bars endpoint may not support seconds.
+            # Build 30s OHLCV from trades instead.
+            # Keep the lookback shorter to avoid huge trade volumes.
+            # ---------------------------------------------------------
+            if timeframe == "30s":
+                start_dt = now - timedelta(hours=12)
+                start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                trades_url = f"https://data.alpaca.markets/v2/stocks/{ticker.upper()}/trades"
+                trades_params = {
+                    "start": start_str,
+                    "end": end_str,
+                    "limit": 10000,
+                    "feed": _alpaca_feed(),
+                    "sort": "asc",
+                }
+
+                all_trades: list[dict[str, Any]] = []
+                next_page_token = None
+                max_trades = 200_000  # hard cap to keep response bounded
+
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    while True:
+                        if next_page_token:
+                            trades_params["page_token"] = next_page_token
+                        resp = await client.get(trades_url, params=trades_params, headers=headers)
+                        resp.raise_for_status()
+                        data = resp.json()
+                        trades = data.get("trades", [])
+                        if trades:
+                            all_trades.extend(trades)
+                            if len(all_trades) >= max_trades:
+                                all_trades = all_trades[:max_trades]
+                                break
+                        next_page_token = data.get("next_page_token")
+                        if not next_page_token:
+                            break
+
+                if not all_trades:
+                    return JSONResponse({"error": f"No trades for {ticker} in the last 12 hours"})
+
+                tdf = pd.DataFrame(all_trades)
+                if "t" not in tdf.columns or "p" not in tdf.columns:
+                    return JSONResponse({"error": f"Unexpected trade schema for {ticker}"})
+
+                tdf["ts_ms"] = pd.to_datetime(tdf["t"]).astype("int64") // 10**6
+                tdf["price"] = tdf["p"]
+                tdf["size"] = tdf["s"] if "s" in tdf.columns else 0
+                tdf = tdf.sort_values("ts_ms").reset_index(drop=True)
+
+                bucket_ms = 30_000
+                tdf["bucket"] = (tdf["ts_ms"] // bucket_ms).astype("int64")
+
+                agg = tdf.groupby("bucket").agg(
+                    open=("price", "first"),
+                    high=("price", "max"),
+                    low=("price", "min"),
+                    close=("price", "last"),
+                    volume=("size", "sum"),
+                    start_ts_ms=("ts_ms", "min"),
+                ).reset_index()
+
+                candles = []
+                for _, row in agg.iterrows():
+                    # Lightweight Charts expects seconds; we use candle END time
+                    end_sec = int(row["start_ts_ms"] // 1000) + 30
+                    candles.append(
+                        {
+                            "time": end_sec,
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                            "volume": float(row["volume"]),
+                        }
+                    )
+
+                return JSONResponse(
+                    {
+                        "ticker": ticker.upper(),
+                        "timeframe": timeframe,
+                        "candles": candles,
+                        "count": len(candles),
+                        "_meta": {"source": "trades_resample_30s", "lookback_hours": 12, "trades": len(all_trades)},
+                    }
+                )
+
+            # ---------------------------------------------------------
+            # 1m/2m/3m candles: use Alpaca bars endpoint
+            # ---------------------------------------------------------
+            tf_map = {
+                "1m": "1Min",
+                "2m": "2Min",
+                "3m": "3Min",
+            }
+            alpaca_tf = tf_map.get(timeframe, "1Min")
+
             url = f"https://data.alpaca.markets/v2/stocks/{ticker.upper()}/bars"
             params = {
                 "start": start_str,
                 "end": end_str,
                 "timeframe": alpaca_tf,
-                "feed": "sip",
+                "feed": _alpaca_feed(),
                 "limit": 10000,  # Max allowed
             }
-            headers = {
-                "APCA-API-KEY-ID": api_key,
-                "APCA-API-SECRET-KEY": secret_key,
-            }
-            
+
             all_bars = []
             next_page_token = None
-            
+
             async with httpx.AsyncClient(timeout=30.0) as client:
                 while True:
                     if next_page_token:
                         params["page_token"] = next_page_token
-                    
+
                     resp = await client.get(url, params=params, headers=headers)
                     resp.raise_for_status()
                     data = resp.json()
-                    
+
                     bars = data.get("bars", [])
                     all_bars.extend(bars)
-                    
+
                     next_page_token = data.get("next_page_token")
                     if not next_page_token:
                         break
-            
+
             if not all_bars:
                 return JSONResponse({"error": f"No data for {ticker} in the last week"})
-            
-            # Convert to Lightweight Charts format
-            # Time must be Unix timestamp in seconds
-            # Map timeframe to seconds for END time calculation
-            tf_seconds = {
-                "30s": 30,
-                "1m": 60,
-                "2m": 120,
-                "3m": 180,
-            }
+
+            # Convert to Lightweight Charts format (use candle END time)
+            tf_seconds = {"1m": 60, "2m": 120, "3m": 180}
             duration_sec = tf_seconds.get(timeframe, 60)
-            
+
             candles = []
             for bar in all_bars:
-                # Parse Alpaca timestamp (RFC3339)
                 ts_str = bar.get("t", "")
                 if ts_str:
-                    # Remove 'Z' and parse
                     ts_str = ts_str.replace("Z", "+00:00")
                     dt = datetime.fromisoformat(ts_str)
-                    # Use candle END time to match Webull display
-                    # Alpaca returns START time, so we add the candle duration
                     unix_ts = int(dt.timestamp()) + duration_sec
-                    
-                    candles.append({
-                        "time": unix_ts,
-                        "open": bar.get("o"),
-                        "high": bar.get("h"),
-                        "low": bar.get("l"),
-                        "close": bar.get("c"),
-                    })
-            
-            return JSONResponse({
-                "ticker": ticker.upper(),
-                "timeframe": timeframe,
-                "candles": candles,
-                "count": len(candles),
-            })
+                    candles.append(
+                        {
+                            "time": unix_ts,
+                            "open": bar.get("o"),
+                            "high": bar.get("h"),
+                            "low": bar.get("l"),
+                            "close": bar.get("c"),
+                            "volume": bar.get("v"),
+                        }
+                    )
+
+            return JSONResponse({"ticker": ticker.upper(), "timeframe": timeframe, "candles": candles, "count": len(candles)})
             
         except Exception as e:
             return JSONResponse({"error": str(e)})
@@ -1150,6 +1299,728 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         return JSONResponse(job)
+
+    @app.get("/api/jobs/stop")
+    def api_stop_live_job(session_id: str) -> RedirectResponse:
+        """Stop a live job by session_id and redirect back."""
+        # Find the job with this session_id
+        jobs = job_manager.list_jobs(status="live")
+        for j in jobs:
+            if j.get("session_id") == session_id:
+                job_manager.stop_live_job(j["job_id"])
+                break
+        # Redirect to the report page
+        # Need to extract date from session_id (format: TICKER_YYYYMMDD_HHMMSS_LIVE)
+        parts = session_id.split("_")
+        if len(parts) >= 2:
+            date_part = parts[1]  # YYYYMMDD
+            date_str = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+            ticker = parts[0]
+            return RedirectResponse(url=f"/sessions/{date_str}/{ticker}/{session_id}/report", status_code=303)
+        return RedirectResponse(url="/jobs", status_code=303)
+
+    # ============ API: SCANNER ============
+    from godmode.scan.downtrend_break_scanner import DowntrendBreakScanner, ScannerConfig
+
+    _scanner_cfg = ScannerConfig(top_n=12, refresh_seconds=5)
+    _scanner = DowntrendBreakScanner(cfg=_scanner_cfg)
+    _scanner_cache: dict[str, Any] = {"last_run_ms": 0, "payload": None}
+    _scanner_state: dict[str, Any] = {"day": None, "tickers": {}, "alerts": []}
+
+    async def _alpaca_top_gainers(top_n: int) -> list[str]:
+        import os
+        import httpx
+
+        api_key = os.environ.get("ALPACA_API_KEY", "")
+        api_secret = os.environ.get("ALPACA_SECRET_KEY", "")
+        if not api_key or not api_secret:
+            return []
+        url = "https://data.alpaca.markets/v1beta1/screener/stocks/movers"
+        headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret}
+        params = {"top": int(top_n)}
+        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+        movers = data.get("movers", []) if isinstance(data, dict) else []
+        syms: list[str] = []
+        for m in movers:
+            if not isinstance(m, dict) or not m.get("symbol"):
+                continue
+            # Prefer gainers only when the payload includes change fields.
+            ch = m.get("percent_change", m.get("change", None))
+            try:
+                if ch is not None and float(ch) <= 0:
+                    continue
+            except Exception:
+                pass
+            syms.append(str(m["symbol"]).upper())
+        return syms[: int(top_n)]
+
+    def _ct_now_str() -> str:
+        from datetime import datetime, timezone
+        import pytz
+
+        dt = datetime.now(tz=timezone.utc)
+        chicago = pytz.timezone("America/Chicago")
+        return dt.astimezone(chicago).strftime("%Y-%m-%d %H:%M:%S CT")
+
+    def _ct_day_key() -> str:
+        from datetime import datetime, timezone
+        import pytz
+
+        dt = datetime.now(tz=timezone.utc)
+        chicago = pytz.timezone("America/Chicago")
+        return dt.astimezone(chicago).strftime("%Y-%m-%d")
+
+    def _ct_hm() -> float:
+        from datetime import datetime, timezone
+        import pytz
+
+        dt = datetime.now(tz=timezone.utc)
+        chicago = pytz.timezone("America/Chicago")
+        local = dt.astimezone(chicago)
+        return float(local.hour) + float(local.minute) / 60.0
+
+    @app.get("/api/scanner")
+    async def api_scanner() -> JSONResponse:
+        import time
+
+        hm = _ct_hm()
+        paused = hm < 3.0 or hm >= 15.0
+        now_ms = int(time.time() * 1000)
+        last_run = int(_scanner_cache.get("last_run_ms") or 0)
+        if _scanner_cache.get("payload") is not None and (now_ms - last_run) < int(
+            _scanner_cfg.refresh_seconds * 1000
+        ):
+            payload = dict(_scanner_cache["payload"])
+            payload["paused"] = paused
+            payload["now_ct"] = _ct_now_str()
+            return JSONResponse(payload)
+
+        day_key = _ct_day_key()
+        if _scanner_state.get("day") != day_key:
+            _scanner_state["day"] = day_key
+            _scanner_state["tickers"] = {}
+            _scanner_state["alerts"] = []
+
+        tickers = await _alpaca_top_gainers(_scanner_cfg.top_n)
+        results = await _scanner.scan(tickers, now_ms=now_ms) if not paused else []
+
+        tf_order = ["30s", "1m", "2m", "3m", "5m"]
+        new_alerts: list[dict[str, Any]] = []
+
+        for r in results:
+            t = r.ticker
+            st = _scanner_state["tickers"].setdefault(
+                t,
+                {"cycle": 0, "fired": set(), "noted_align": False, "armed": False, "low_at_cycle": None},
+            )
+
+            if st["low_at_cycle"] is not None and r.session_low is not None:
+                prev_low = float(st["low_at_cycle"])
+                cur_low = float(r.session_low)
+                if cur_low < prev_low * (1.0 - float(_scanner_cfg.new_low_realert_min_drop_pct)):
+                    st["armed"] = True
+
+            if st["armed"]:
+                any_positive = any(s.ema_ok and s.macd_ok for s in (r.signals or []))
+                if any_positive:
+                    st["cycle"] += 1
+                    st["fired"] = set()
+                    st["noted_align"] = False
+                    st["armed"] = False
+                    st["low_at_cycle"] = r.session_low
+
+            if st["low_at_cycle"] is None:
+                st["low_at_cycle"] = r.session_low
+
+            sig_by_tf = {s.timeframe: s for s in (r.signals or [])}
+            for tf in tf_order:
+                s = sig_by_tf.get(tf)
+                if s is None:
+                    continue
+                if not (s.ema_ok and s.macd_ok):
+                    continue
+                key = f"{tf}:cycle{st['cycle']}"
+                if key in st["fired"]:
+                    continue
+                st["fired"].add(key)
+                new_alerts.append(
+                    {"ticker": t, "kind": f"{tf} EMA+MACD", "when": _ct_now_str(), "detail": f"MACD={s.macd_tier}"}
+                )
+
+            for s in (r.signals or []):
+                if not s.ema200_touch_regain:
+                    continue
+                key = f"ema200:{s.timeframe}:cycle{st['cycle']}"
+                if key in st["fired"]:
+                    continue
+                st["fired"].add(key)
+                new_alerts.append(
+                    {"ticker": t, "kind": f"{s.timeframe} EMA200 regain", "when": _ct_now_str(), "detail": s.ema200_reason}
+                )
+
+            if not st["noted_align"]:
+                need = {f"{tf}:cycle{st['cycle']}" for tf in ("30s", "1m", "2m", "3m")}
+                if need.issubset(set(st["fired"])):
+                    st["noted_align"] = True
+                    new_alerts.append(
+                        {"ticker": t, "kind": "ALIGN 30s+1m+2m+3m", "when": _ct_now_str(), "detail": "multi-timeframe alignment"}
+                    )
+
+        if new_alerts:
+            _scanner_state["alerts"] = (new_alerts + _scanner_state["alerts"])[:200]
+
+        payload = {
+            "paused": paused,
+            "now_ct": _ct_now_str(),
+            "results": [
+                {**r.__dict__, "signals": [s.__dict__ for s in (r.signals or [])]} for r in results
+            ],
+            "alerts": _scanner_state["alerts"],
+        }
+        _scanner_cache["last_run_ms"] = now_ms
+        _scanner_cache["payload"] = payload
+        return JSONResponse(payload)
+
+    async def _scanner_tick(*, now_ms: int) -> dict[str, Any]:
+        day_key = _ct_day_key()
+        if _scanner_state.get("day") != day_key:
+            _scanner_state["day"] = day_key
+            _scanner_state["tickers"] = {}
+            _scanner_state["alerts"] = []
+
+        tickers = await _alpaca_top_gainers(_scanner_cfg.top_n)
+        results = await _scanner.scan(tickers, now_ms=now_ms)
+
+        tf_order = ["30s", "1m", "2m", "3m", "5m"]
+        new_alerts: list[dict[str, Any]] = []
+
+        for r in results:
+            t = r.ticker
+            st = _scanner_state["tickers"].setdefault(
+                t,
+                {"cycle": 0, "fired": set(), "noted_align": False, "armed": False, "low_at_cycle": None},
+            )
+
+            if st["low_at_cycle"] is not None and r.session_low is not None:
+                prev_low = float(st["low_at_cycle"])
+                cur_low = float(r.session_low)
+                if cur_low < prev_low * (1.0 - float(_scanner_cfg.new_low_realert_min_drop_pct)):
+                    st["armed"] = True
+
+            if st["armed"]:
+                any_positive = any(s.ema_ok and s.macd_ok for s in (r.signals or []))
+                if any_positive:
+                    st["cycle"] += 1
+                    st["fired"] = set()
+                    st["noted_align"] = False
+                    st["armed"] = False
+                    st["low_at_cycle"] = r.session_low
+
+            if st["low_at_cycle"] is None:
+                st["low_at_cycle"] = r.session_low
+
+            sig_by_tf = {s.timeframe: s for s in (r.signals or [])}
+            for tf in tf_order:
+                s = sig_by_tf.get(tf)
+                if s is None or not (s.ema_ok and s.macd_ok):
+                    continue
+                key = f"{tf}:cycle{st['cycle']}"
+                if key in st["fired"]:
+                    continue
+                st["fired"].add(key)
+                new_alerts.append(
+                    {"ticker": t, "kind": f"{tf} EMA+MACD", "when": _ct_now_str(), "detail": f"MACD={s.macd_tier}"}
+                )
+
+            for s in (r.signals or []):
+                if not s.ema200_touch_regain:
+                    continue
+                key = f"ema200:{s.timeframe}:cycle{st['cycle']}"
+                if key in st["fired"]:
+                    continue
+                st["fired"].add(key)
+                new_alerts.append(
+                    {"ticker": t, "kind": f"{s.timeframe} EMA200 regain", "when": _ct_now_str(), "detail": s.ema200_reason}
+                )
+
+            if not st["noted_align"]:
+                need = {f"{tf}:cycle{st['cycle']}" for tf in ("30s", "1m", "2m", "3m")}
+                if need.issubset(set(st["fired"])):
+                    st["noted_align"] = True
+                    new_alerts.append(
+                        {"ticker": t, "kind": "ALIGN 30s+1m+2m+3m", "when": _ct_now_str(), "detail": "multi-timeframe alignment"}
+                    )
+
+        if new_alerts:
+            _scanner_state["alerts"] = (new_alerts + _scanner_state["alerts"])[:200]
+
+        payload = {
+            "paused": False,
+            "now_ct": _ct_now_str(),
+            "results": [{**r.__dict__, "signals": [s.__dict__ for s in (r.signals or [])]} for r in results],
+            "alerts": _scanner_state["alerts"],
+            "new_alerts": new_alerts,
+        }
+        _scanner_cache["last_run_ms"] = now_ms
+        _scanner_cache["payload"] = payload
+        return payload
+
+    async def _scanner_loop() -> None:
+        import os
+        import time
+        from godmode.scan.expo_push import ExpoPushMessage, send_expo_push
+
+        if (os.environ.get("SCANNER_ENABLED") or "").strip() != "1":
+            return
+        interval_s = int((os.environ.get("SCANNER_INTERVAL_SECONDS") or "840").strip() or "840")
+        tokens_raw = (os.environ.get("EXPO_PUSH_TOKENS") or "").strip()
+        tokens = [t.strip() for t in tokens_raw.split(",") if t.strip()]
+
+        while True:
+            try:
+                hm = _ct_hm()
+                if hm < 3.0 or hm >= 15.0:
+                    await asyncio.sleep(interval_s)
+                    continue
+
+                now_ms = int(time.time() * 1000)
+                payload = await _scanner_tick(now_ms=now_ms)
+                new_alerts = payload.get("new_alerts") or []
+                if tokens and new_alerts:
+                    messages: list[ExpoPushMessage] = []
+                    for a in new_alerts[:25]:
+                        title = f"{a['ticker']} {a['kind']}"
+                        body = a.get("detail") or ""
+                        data = {
+                            "type": "alert",
+                            "symbol": a.get("ticker"),
+                            "kind": a.get("kind"),
+                            "detail": a.get("detail"),
+                            "when": a.get("when"),
+                        }
+                        for tok in tokens:
+                            messages.append(ExpoPushMessage(to=tok, title=title, body=body, data=data))
+                    await send_expo_push(messages=messages)
+            except Exception:
+                pass
+            await asyncio.sleep(interval_s)
+
+    @app.on_event("startup")
+    async def _start_scanner_loop() -> None:
+        # Fire-and-forget background scanner loop for hosted deploys (Render).
+        asyncio.create_task(_scanner_loop())
+
+    @app.get("/api/live/fast")
+    async def api_live_fast(ticker: str, level: float, start_ms: int, end_ms: int) -> JSONResponse:
+        """
+        FAST real-time analysis - no file I/O, no full pipeline.
+        Fetches trades AND quotes from Alpaca, uses Lee-Ready for buy/sell classification.
+        """
+        import os
+        import asyncio
+        import httpx
+        from datetime import datetime
+        from godmode.webapp.store import compute_fast_zones_with_quotes, _compute_ema_macd_setup
+        
+        try:
+            api_key = os.environ.get("ALPACA_API_KEY", "")
+            api_secret = os.environ.get("ALPACA_SECRET_KEY", "")
+            
+            if not api_key or not api_secret:
+                return JSONResponse({"error": "Alpaca API not configured", "level_data": None})
+            
+            # Convert timestamps to RFC3339
+            start_dt = datetime.utcfromtimestamp(start_ms / 1000)
+            end_dt = datetime.utcfromtimestamp(end_ms / 1000)
+            start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            
+            headers = {
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": api_secret,
+            }
+            
+            # Fetch BOTH trades and quotes for Lee-Ready classification.
+            # IMPORTANT: we must paginate for longer windows or liquid tickers, otherwise we only get the tail.
+            MAX_PAGES = 50
+            MAX_TRADES = 250_000
+            MAX_QUOTES = 250_000
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async def _fetch_all(url: str, params: dict, key: str, max_pages: int, max_rows: int):
+                    rows: list[dict] = []
+                    next_page_token = None
+                    truncated = False
+
+                    for _ in range(max_pages):
+                        if next_page_token:
+                            params["page_token"] = next_page_token
+                        else:
+                            params.pop("page_token", None)
+
+                        resp = await client.get(url, params=params, headers=headers)
+                        if resp.status_code != 200:
+                            raise RuntimeError(f"Alpaca {key}: {resp.status_code}")
+
+                        data = resp.json()
+                        batch = data.get(key, []) or []
+                        rows.extend(batch)
+
+                        if len(rows) >= max_rows:
+                            truncated = True
+                            break
+
+                        next_page_token = data.get("next_page_token")
+                        if not next_page_token:
+                            break
+
+                    if next_page_token:
+                        truncated = True
+
+                    return rows, truncated
+
+                trades_url = f"https://data.alpaca.markets/v2/stocks/{ticker}/trades"
+                feed = _alpaca_feed()
+                trades_params = {"start": start_str, "end": end_str, "limit": 10000, "feed": feed, "sort": "desc"}
+
+                quotes_url = f"https://data.alpaca.markets/v2/stocks/{ticker}/quotes"
+                quotes_params = {"start": start_str, "end": end_str, "limit": 10000, "feed": feed, "sort": "desc"}
+
+                try:
+                    trades, trades_truncated = await _fetch_all(
+                        trades_url, trades_params, "trades", MAX_PAGES, MAX_TRADES
+                    )
+                except RuntimeError as e:
+                    return JSONResponse({"error": str(e), "level_data": None})
+
+                # Quotes are helpful; if they error/truncate, we can still run with empty/partial quotes.
+                quotes = []
+                quotes_truncated = False
+                try:
+                    quotes, quotes_truncated = await _fetch_all(
+                        quotes_url, quotes_params, "quotes", MAX_PAGES, MAX_QUOTES
+                    )
+                except Exception:
+                    quotes = []
+                    quotes_truncated = True
+            
+            if not trades:
+                return JSONResponse({"error": f"No trades for {ticker}", "level_data": None})
+            
+            # Convert to DataFrames
+            import pandas as pd
+            tdf = pd.DataFrame(trades)
+            qdf = pd.DataFrame(quotes) if quotes else pd.DataFrame()
+            
+            # Parse trade timestamps and prices
+            if "t" in tdf.columns:
+                tdf["ts_ms"] = pd.to_datetime(tdf["t"]).astype("int64") // 10**6
+            if "p" in tdf.columns:
+                tdf["price"] = tdf["p"]
+            if "s" in tdf.columns:
+                tdf["size"] = tdf["s"]
+            
+            # Re-sort to chronological order (we fetched desc to get latest)
+            if "ts_ms" in tdf.columns:
+                tdf = tdf.sort_values("ts_ms").reset_index(drop=True)
+            
+            # Parse quote timestamps and bid/ask
+            if not qdf.empty and "t" in qdf.columns:
+                qdf["ts_ms"] = pd.to_datetime(qdf["t"]).astype("int64") // 10**6
+                if "bp" in qdf.columns:
+                    qdf["bid"] = qdf["bp"]
+                if "ap" in qdf.columns:
+                    qdf["ask"] = qdf["ap"]
+                qdf["midpoint"] = (qdf["bid"] + qdf["ask"]) / 2
+                # Re-sort to chronological order
+                qdf = qdf.sort_values("ts_ms").reset_index(drop=True)
+
+            coverage = {
+                "requested_start_ms": start_ms,
+                "requested_end_ms": end_ms,
+                "trades_truncated": bool(trades_truncated),
+                "quotes_truncated": bool(quotes_truncated),
+                "trades_count": int(len(tdf)),
+                "quotes_count": int(len(qdf)) if not qdf.empty else 0,
+            }
+            try:
+                if "ts_ms" in tdf.columns and len(tdf) > 0:
+                    coverage["trades_start_ms"] = int(tdf["ts_ms"].iloc[0])
+                    coverage["trades_end_ms"] = int(tdf["ts_ms"].iloc[-1])
+                    coverage["covers_start"] = int(tdf["ts_ms"].iloc[0]) <= start_ms
+                    coverage["covers_end"] = int(tdf["ts_ms"].iloc[-1]) >= end_ms
+            except Exception:
+                pass
+            try:
+                if not qdf.empty and "ts_ms" in qdf.columns:
+                    coverage["quotes_start_ms"] = int(qdf["ts_ms"].iloc[0])
+                    coverage["quotes_end_ms"] = int(qdf["ts_ms"].iloc[-1])
+            except Exception:
+                pass
+            
+            # Show time range of data we actually have
+            if "ts_ms" in tdf.columns and len(tdf) > 0:
+                data_start = datetime.utcfromtimestamp(tdf["ts_ms"].iloc[0] / 1000).strftime("%H:%M:%S")
+                data_end = datetime.utcfromtimestamp(tdf["ts_ms"].iloc[-1] / 1000).strftime("%H:%M:%S")
+                print(f"[FAST] Fetched {len(tdf)} trades ({data_start}-{data_end}), {len(qdf)} quotes for {ticker}")
+            else:
+                print(f"[FAST] Fetched {len(tdf)} trades, {len(qdf)} quotes for {ticker}")
+            
+            # Compute fast zones with Lee-Ready classification
+            result = compute_fast_zones_with_quotes(tdf, qdf, level, interval_s=30)
+            
+            # Debug: print price range and buy/sell info
+            price_min = float(tdf["price"].min()) if "price" in tdf.columns else 0
+            price_max = float(tdf["price"].max()) if "price" in tdf.columns else 0
+            last_price = float(tdf["price"].iloc[-1]) if "price" in tdf.columns and not tdf.empty else 0
+            
+            # Summarize buy/sell from segments
+            segs = result['zone_segments']
+            total_buy = sum(s.get('buy_vol', 0) for s in segs)
+            total_sell = sum(s.get('sell_vol', 0) for s in segs)
+            total_inst_buy = sum(s.get('inst_buy', 0) for s in segs)
+            total_inst_sell = sum(s.get('inst_sell', 0) for s in segs)
+            
+            print(f"[FAST] {ticker} @ ${level:.4f} | price: ${price_min:.4f}-${price_max:.4f} | last: ${last_price:.4f}")
+            print(f"[FAST] {len(segs)} segs | Buy: {total_buy:,.0f} Sell: {total_sell:,.0f} | INST: {total_inst_buy:,.0f}B / {total_inst_sell:,.0f}S")
+            
+            # Compute EMA/MACD
+            setup_10s = _compute_ema_macd_setup(tdf, bar_seconds=10)
+            setup_30s = _compute_ema_macd_setup(tdf, bar_seconds=30)
+            setup_60s = _compute_ema_macd_setup(tdf, bar_seconds=60)
+            setup_120s = _compute_ema_macd_setup(tdf, bar_seconds=120)
+            setup_180s = _compute_ema_macd_setup(tdf, bar_seconds=180)
+
+            def _ema_stack(setup: dict) -> dict:
+                e9 = float(setup.get("ema9", 0) or 0)
+                e20 = float(setup.get("ema20", 0) or 0)
+                e30 = float(setup.get("ema30", 0) or 0)
+                if e9 > e20 and e20 > e30:
+                    stack = "Bull (9>20>30)"
+                elif e9 < e20 and e20 < e30:
+                    stack = "Bear (9<20<30)"
+                else:
+                    stack = "Mixed"
+                return {
+                    "stack": stack,
+                    "ema9": round(e9, 4),
+                    "ema20": round(e20, 4),
+                    "ema30": round(e30, 4),
+                    "bars": int(setup.get("bars", 0) or 0),
+                    "setup_on": bool(setup.get("setup_on", False)),
+                }
+
+            ema_stack = {
+                "10s": _ema_stack(setup_10s),
+                "30s": _ema_stack(setup_30s),
+                "1m": _ema_stack(setup_60s),
+                "2m": _ema_stack(setup_120s),
+                "3m": _ema_stack(setup_180s),
+            }
+            ema_macd = {
+                "setup_1s": {"setup_on": False},
+                # Backward compat: keep setup_10s, but setup_30s is now true 30s
+                "setup_10s": setup_10s,
+                "setup_30s": setup_30s,
+                "setup_1m": setup_60s,
+                "setup_2m": setup_120s,
+                "setup_3m": setup_180s,
+                "ema_stack": ema_stack,
+                "setup_count": int(setup_30s.get("setup_on", False)),
+                "last_price": last_price,
+            }
+            
+            # Format as level_data for frontend compatibility
+            level_data = {
+                "zone_segments": result["zone_segments"],
+                "defense_score": result["defense_score"],
+                "aggression_score": result["aggression_score"],
+                "market_state": result["market_state"],
+                "distribution_pattern": result.get("distribution_pattern", {}),
+                "late_momentum": result.get("late_momentum", {}),
+                "zone_analysis": result.get("zone_analysis", {}),
+                "_debug": {
+                    "price_min": price_min,
+                    "price_max": price_max,
+                    "last_price": last_price,
+                    "trades_count": len(tdf),
+                }
+            }
+            return JSONResponse({"level_data": level_data, "ema_macd": ema_macd, "coverage": coverage})
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return JSONResponse({"error": str(e)[:100], "level_data": None})
+
+    @app.get("/api/live/analyze")
+    async def api_live_analyze(ticker: str, level: float, start_ms: int, end_ms: int) -> JSONResponse:
+        """
+        SLOW real-time analysis for live dashboard (deprecated - use /api/live/fast).
+        Uses EXACT SAME PIPELINE as report page.
+        """
+        import os
+        import shutil
+        import csv
+        import json
+        from godmode.orchestrator.alpaca_export import export_alpaca_to_replay
+        from godmode.orchestrator.session import run_replay_session
+        
+        try:
+            # Check Alpaca credentials
+            api_key = os.environ.get("ALPACA_API_KEY", "")
+            api_secret = os.environ.get("ALPACA_SECRET_KEY", "")
+            
+            if not api_key or not api_secret:
+                return JSONResponse({"error": "Alpaca API credentials not configured", "level_data": None})
+            
+            # Create temp session for this analysis
+            temp_id = f"LIVE_{int(time.time())}"
+            temp_session_id = f"{ticker}_{temp_id}"
+            out_dir = Path(cfg.storage.root_dir) / "replay" / f"{ticker}_{temp_session_id}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Step 1: Export from Alpaca (SAME AS REPORT)
+            try:
+                trades_path, quotes_path = await export_alpaca_to_replay(
+                    config=cfg,
+                    ticker=ticker,
+                    start_ts_ms=start_ms,
+                    end_ts_ms=end_ms,
+                    out_dir=out_dir,
+                )
+            except Exception as fetch_err:
+                error_msg = str(fetch_err)
+                if "Timeout" in error_msg or "timeout" in error_msg:
+                    return JSONResponse({"error": "Alpaca timeout - try shorter time range", "level_data": None})
+                return JSONResponse({"error": f"Alpaca error: {error_msg[:100]}", "level_data": None})
+            
+            # Check if we got any data
+            import pandas as pd
+            try:
+                tdf = pd.read_parquet(trades_path)
+                if tdf.empty or "ts_ms" not in tdf.columns:
+                    return JSONResponse({"error": f"No trades for {ticker} in this time range", "level_data": None})
+            except Exception:
+                return JSONResponse({"error": f"No data for {ticker}", "level_data": None})
+            
+            # Step 2: Create commands.csv with the level (SAME AS REPORT)
+            commands_csv_path = out_dir / "commands.csv"
+            header = ["ts_ms", "ticker", "type", "marker_type", "marker_id", "direction_bias", 
+                      "notes", "level_price", "level_type", "level_width_atr", "level_id"]
+            
+            with open(commands_csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=header)
+                writer.writeheader()
+                # Add the level
+                writer.writerow({
+                    "ts_ms": start_ms,
+                    "ticker": ticker,
+                    "type": "add_level",
+                    "marker_type": "",
+                    "marker_id": "",
+                    "direction_bias": "",
+                    "notes": json.dumps({"end_ts_ms": end_ms}),
+                    "level_price": level,
+                    "level_type": "support",
+                    "level_width_atr": 0.25,
+                    "level_id": f"live_level:{ticker}:{level}",
+                })
+                # Add marker for the watch window (use support_bounce as the type)
+                # Notes must have schema, watch times, and price_tags for level_chain detection
+                marker_notes = {
+                    "schema": "level_chain_v1",
+                    "chain_id": f"live_{ticker}",
+                    "end_ts_ms": end_ms,
+                    "watch_start_ts_ms": start_ms,
+                    "watch_end_ts_ms": end_ms,
+                    "price_tags": [{"price": level, "kind": "support"}],
+                    "direction_bias": "long",
+                    "band_pct": 0.0015,  # 0.15% band
+                }
+                writer.writerow({
+                    "ts_ms": start_ms,
+                    "ticker": ticker,
+                    "type": "add_marker",
+                    "marker_type": "support_bounce",
+                    "marker_id": f"live_watch:{ticker}",
+                    "direction_bias": "long",
+                    "notes": json.dumps(marker_notes),
+                    "level_price": "",
+                    "level_type": "",
+                    "level_width_atr": "",
+                    "level_id": "",
+                })
+            
+            # Step 3: Run replay session (SAME AS REPORT)
+            await run_replay_session(
+                ticker=ticker,
+                session_id=temp_session_id,
+                direction_bias="long",
+                levels_yaml=None,
+                trades_path=trades_path,
+                quotes_path=quotes_path,
+                commands_csv=commands_csv_path,
+                config=cfg,
+            )
+            
+            # Step 4: Compute report (SAME AS REPORT)
+            # Get date from the actual trade data timestamps
+            date_str = datetime.fromtimestamp(start_ms / 1000).strftime("%Y-%m-%d")
+            print(f"[LIVE] Computing report for date={date_str}, ticker={ticker}, session={temp_session_id}")
+            
+            report = store.compute_session_report(
+                date=date_str,
+                ticker=ticker,
+                session_id=temp_session_id,
+            )
+            
+            print(f"[LIVE] Report keys: {list(report.keys())}")
+            print(f"[LIVE] Level chains count: {len(report.get('level_chains', []))}")
+            
+            # Extract level data from report
+            level_data = None
+            for chain in report.get("level_chains", []):
+                print(f"[LIVE] Chain has {len(chain.get('levels', []))} levels")
+                for lv in chain.get("levels", []):
+                    level_data = lv
+                    break
+                if level_data:
+                    break
+            
+            # Compute EMA/MACD setup signals from trades using 10s bars (matches refresh interval)
+            from godmode.webapp.store import _compute_ema_macd_setup
+            
+            # Use 10-second bars to match the 10-second refresh interval
+            setup_10s = _compute_ema_macd_setup(tdf, bar_seconds=10)
+            
+            ema_macd = {
+                "setup_1s": {"setup_on": False},  # Skipped for performance
+                "setup_30s": setup_10s,  # Named 30s for backward compat but uses 10s bars
+                "setup_count": int(setup_10s.get("setup_on", False)),
+                "last_price": float(tdf["price"].iloc[-1]) if "price" in tdf.columns and not tdf.empty else 0,
+            }
+            
+            # Cleanup temp files
+            try:
+                shutil.rmtree(out_dir)
+                # Also clean up the episodes/snapshots/session_stream dirs
+                for kind in ["episodes", "snapshots", "session_stream", "tf_indicators", "markers"]:
+                    p = Path(cfg.storage.root_dir) / kind / f"date={date_str}" / f"ticker={ticker}" / f"session={temp_session_id}"
+                    if p.exists():
+                        shutil.rmtree(p)
+            except Exception:
+                pass
+            
+            return JSONResponse({"level_data": level_data, "ema_macd": ema_macd})
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return JSONResponse({"error": str(e), "level_data": None})
 
     @app.post("/record", response_class=RedirectResponse)
     async def record_form_submit(request: Request) -> RedirectResponse:
@@ -1180,6 +2051,9 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             if key.startswith("level_price_") or key.startswith("level_type_"):
                 level_indices.add(key.split("_")[-1])
 
+        # Track if we're in live mode based on levels (start provided but no end)
+        level_live_mode = False
+        
         for idx in sorted(level_indices, key=lambda x: int(x) if str(x).isdigit() else 999999):
             level_type = form.get(f"level_type_{idx}") or "price"
             k_raw = form.get(f"level_kind_{idx}") or "support"
@@ -1187,12 +2061,19 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             e_raw = form.get(f"level_end_{idx}")
             o_raw = form.get(f"level_outcome_{idx}") or ""
 
-            # Validate start/end times
-            if s_raw is None or str(s_raw).strip() == "" or e_raw is None or str(e_raw).strip() == "":
+            # Validate start time (required)
+            if s_raw is None or str(s_raw).strip() == "":
                 continue
+            
+            # End time is optional - if missing, we're in live mode
             try:
                 start_ts_ms = _parse_local_datetime_to_utc_ms(str(s_raw), str(timezone_name))
-                end_ts_ms = _parse_local_datetime_to_utc_ms(str(e_raw), str(timezone_name))
+                if e_raw is None or str(e_raw).strip() == "":
+                    # LIVE MODE: No end time, use current time
+                    end_ts_ms = int(time.time() * 1000)
+                    level_live_mode = True
+                else:
+                    end_ts_ms = _parse_local_datetime_to_utc_ms(str(e_raw), str(timezone_name))
             except Exception:
                 continue
             if end_ts_ms <= start_ts_ms:
@@ -1279,14 +2160,27 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
 
         # Parse/derive session start/end with timezone conversion.
         # If user left session start/end blank, derive from levels (recommended workflow).
+        # If start is provided but end is blank → LIVE MODE
         pad_ms = 0  # No padding - use exact times as entered
+        is_live = False
+        
         if start_raw and end_raw:
+            # Both provided - normal replay mode
             try:
                 start_ms = _parse_local_datetime_to_utc_ms(str(start_raw), str(timezone_name))
                 end_ms = _parse_local_datetime_to_utc_ms(str(end_raw), str(timezone_name))
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Invalid datetime: {e}")
+        elif start_raw and not end_raw:
+            # Start provided but no end → LIVE MODE
+            try:
+                start_ms = _parse_local_datetime_to_utc_ms(str(start_raw), str(timezone_name))
+                end_ms = None  # Will be set to current time in jobs.py
+                is_live = True
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid datetime: {e}")
         else:
+            # Derive from levels
             if not level_time_ranges_ms:
                 raise HTTPException(
                     status_code=400,
@@ -1296,8 +2190,13 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             max_end = max(e for _, e in level_time_ranges_ms)
             start_ms = int(max(0, min_start - pad_ms))
             end_ms = int(max_end + pad_ms)
+            
+            # If levels triggered live mode, propagate it
+            if level_live_mode:
+                is_live = True
+                end_ms = None  # Will be set to current time in jobs.py
 
-        if end_ms <= start_ms:
+        if not is_live and end_ms is not None and end_ms <= start_ms:
             raise HTTPException(status_code=400, detail="Session end must be after session start.")
 
         # Extract legacy markers from form (backward-compatible)
@@ -1354,6 +2253,7 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
             end_ms=end_ms,
             direction_bias=str(direction_bias),
             markers=markers,
+            is_live=is_live,
         )
 
         return RedirectResponse(url="/jobs", status_code=303)

@@ -25,6 +25,10 @@ This project spans **Windows + Python tooling + market data providers + Parquet*
   - `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`
 - **Prevention**: keep keys out of git; rotate if ever exposed.
 
+### 403 / Not authorized (Alpaca)
+- **Cause**: your account may be **IEX-only**, but the app is configured for **SIP**.
+- **Fix**: set `ALPACA_FEED=iex` and restart. If you pay for SIP, set `ALPACA_FEED=sip`.
+
 ### 403 / Not authorized (Polygon)
 - **Cause**: plan does not include tick trades/quotes.
 - **Fix**: upgrade plan or use Alpaca.

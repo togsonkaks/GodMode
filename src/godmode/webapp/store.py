@@ -19,12 +19,564 @@ def _read_all_parquet_files(paths: list[Path]) -> pd.DataFrame:
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 
+def _compute_ema(prices: list[float], period: int) -> list[float]:
+    """Compute EMA for a list of prices."""
+    if not prices or period <= 0:
+        return []
+    ema = []
+    multiplier = 2.0 / (period + 1)
+    # Initialize with SMA for first `period` values
+    if len(prices) < period:
+        return [sum(prices) / len(prices)] * len(prices)
+    
+    sma = sum(prices[:period]) / period
+    ema = [0.0] * (period - 1) + [sma]
+    
+    for i in range(period, len(prices)):
+        ema_val = (prices[i] - ema[-1]) * multiplier + ema[-1]
+        ema.append(ema_val)
+    
+    return ema
+
+
+def _compute_macd(prices: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict[str, list[float]]:
+    """Compute MACD line, signal line, and histogram."""
+    if len(prices) < slow:
+        return {"macd": [], "signal": [], "histogram": []}
+    
+    ema_fast = _compute_ema(prices, fast)
+    ema_slow = _compute_ema(prices, slow)
+    
+    # MACD line = EMA_fast - EMA_slow
+    macd_line = []
+    for i in range(len(prices)):
+        if i < slow - 1:
+            macd_line.append(0.0)
+        else:
+            macd_line.append(ema_fast[i] - ema_slow[i])
+    
+    # Signal line = EMA of MACD line
+    macd_values_for_signal = macd_line[slow - 1:]  # Only valid MACD values
+    signal_line_partial = _compute_ema(macd_values_for_signal, signal)
+    signal_line = [0.0] * (slow - 1) + signal_line_partial
+    
+    # Histogram = MACD - Signal
+    histogram = [macd_line[i] - signal_line[i] for i in range(len(prices))]
+    
+    return {"macd": macd_line, "signal": signal_line, "histogram": histogram}
+
+
+def _compute_ema_macd_setup(trades_df: pd.DataFrame, bar_seconds: int) -> dict[str, Any]:
+    """
+    Compute EMA/MACD setup from trades.
+    
+    Returns:
+        {
+            "ema9": float, "ema20": float, "ema30": float,
+            "macd": float, "signal": float,
+            "ema_ok": bool, "macd_ok": bool, "setup_on": bool,
+            "prev_ema9": float, "prev_ema30": float  # for crossover detection
+        }
+    """
+    if trades_df.empty:
+        return {"setup_on": False, "ema_ok": False, "macd_ok": False}
+    
+    # Get timestamp and price columns
+    ts_col = "ts_ms" if "ts_ms" in trades_df.columns else "timestamp"
+    price_col = "price" if "price" in trades_df.columns else "last_price"
+    
+    if ts_col not in trades_df.columns or price_col not in trades_df.columns:
+        return {"setup_on": False, "ema_ok": False, "macd_ok": False}
+    
+    df = trades_df.copy()
+    df = df.sort_values(ts_col)
+    
+    # Create bars of specified duration
+    df["bar"] = (df[ts_col] // (bar_seconds * 1000)).astype(int)
+    
+    # OHLC per bar (use last price as close)
+    bars = df.groupby("bar").agg({
+        price_col: ["first", "max", "min", "last"]
+    }).reset_index()
+    bars.columns = ["bar", "open", "high", "low", "close"]
+    
+    if len(bars) < 30:
+        return {"setup_on": False, "ema_ok": False, "macd_ok": False, "bars": len(bars)}
+    
+    closes = bars["close"].tolist()
+    
+    # Compute EMAs
+    ema9 = _compute_ema(closes, 9)
+    ema20 = _compute_ema(closes, 20)
+    ema30 = _compute_ema(closes, 30)
+    
+    # Compute MACD
+    macd_data = _compute_macd(closes, 12, 26, 9)
+    
+    # Get current and previous values
+    curr_ema9 = ema9[-1] if ema9 else 0
+    curr_ema20 = ema20[-1] if ema20 else 0
+    curr_ema30 = ema30[-1] if ema30 else 0
+    prev_ema9 = ema9[-2] if len(ema9) >= 2 else curr_ema9
+    prev_ema30 = ema30[-2] if len(ema30) >= 2 else curr_ema30
+    
+    curr_macd = macd_data["macd"][-1] if macd_data["macd"] else 0
+    curr_signal = macd_data["signal"][-1] if macd_data["signal"] else 0
+    
+    # Check crossover: EMA9 was below EMA30 and now above
+    crossover = (prev_ema9 <= prev_ema30) and (curr_ema9 > curr_ema30)
+    
+    # emaOK = (EMA9 > EMA20) AND (EMA9 > EMA30 OR crossover)
+    ema_ok = (curr_ema9 > curr_ema20) and (curr_ema9 > curr_ema30 or crossover)
+    
+    # macdOK = MACD > Signal
+    macd_ok = curr_macd > curr_signal
+    
+    # setupON = emaOK AND macdOK
+    setup_on = ema_ok and macd_ok
+    
+    return {
+        "ema9": round(curr_ema9, 4),
+        "ema20": round(curr_ema20, 4),
+        "ema30": round(curr_ema30, 4),
+        "macd": round(curr_macd, 6),
+        "signal": round(curr_signal, 6),
+        "ema_ok": ema_ok,
+        "macd_ok": macd_ok,
+        "setup_on": setup_on,
+        "crossover": crossover,
+        "bars": len(bars),
+        "last_close": closes[-1] if closes else 0,
+    }
+
+
+def compute_fast_zones_with_quotes(
+    trades_df: pd.DataFrame,
+    quotes_df: pd.DataFrame,
+    level_price: float,
+    interval_s: int = 30,
+    above_pct: float = 5.0,
+    below_pct: float = 5.0,
+    on_pct: float = 1.5,
+    on_pct_down: float = 2.0,
+) -> dict[str, Any]:
+    """
+    FAST zone computation with LEE-READY buy/sell classification.
+    
+    LEE-READY ALGORITHM:
+    ====================
+    For each trade, we find the most recent quote (bid/ask) and calculate:
+    
+    1. Midpoint = (Bid + Ask) / 2
+    
+    2. Compare trade price to midpoint:
+       - Trade price > Midpoint → BUY (buyer was aggressive, paid above mid)
+       - Trade price < Midpoint → SELL (seller was aggressive, accepted below mid)
+       - Trade price = Midpoint → Use TICK RULE (compare to previous trade)
+    
+    3. Tick Rule (fallback when price = midpoint):
+       - Price went UP from last trade → BUY
+       - Price went DOWN from last trade → SELL
+       - Price SAME → Use previous classification
+    
+    WHY THIS WORKS:
+    - In a trade, someone is "aggressor" (crosses the spread to get filled)
+    - If trade happens at/above ask → buyer crossed spread → BUY
+    - If trade happens at/below bid → seller crossed spread → SELL
+    - Midpoint comparison approximates this without exact bid/ask match
+    
+    ACCURACY: ~85-95% (vs ~70% for tick rule alone)
+    """
+    if trades_df.empty:
+        return {"zone_segments": [], "defense_score": {}, "aggression_score": {}, "market_state": {}}
+    
+    # Normalize columns
+    ts_col = "ts_ms" if "ts_ms" in trades_df.columns else "timestamp"
+    price_col = "price" if "price" in trades_df.columns else "last_price"
+    size_col = "size" if "size" in trades_df.columns else "qty"
+    
+    if ts_col not in trades_df.columns or price_col not in trades_df.columns:
+        return {"zone_segments": [], "defense_score": {}, "aggression_score": {}, "market_state": {}}
+    
+    df = trades_df.copy()
+    df = df.sort_values(ts_col).reset_index(drop=True)
+    
+    # =========================================
+    # LEE-READY CLASSIFICATION
+    # =========================================
+    
+    has_quotes = (
+        not quotes_df.empty 
+        and "ts_ms" in quotes_df.columns 
+        and "midpoint" in quotes_df.columns
+    )
+    
+    if has_quotes:
+        # Sort quotes by timestamp
+        qdf = quotes_df.copy().sort_values("ts_ms").reset_index(drop=True)
+        quote_ts = qdf["ts_ms"].values
+        quote_mid = qdf["midpoint"].values
+        
+        # For each trade, find the most recent quote using binary search
+        import numpy as np
+        
+        is_buy_list = []
+        last_tick_direction = 0.5  # For tick rule fallback
+        prev_price = None
+        
+        for idx, row in df.iterrows():
+            trade_ts = row[ts_col]
+            trade_price = row[price_col]
+            
+            # Binary search: find the latest quote before this trade
+            quote_idx = np.searchsorted(quote_ts, trade_ts, side='right') - 1
+            
+            if quote_idx >= 0:
+                midpoint = quote_mid[quote_idx]
+                
+                # Lee-Ready: compare trade price to midpoint
+                if trade_price > midpoint:
+                    # Trade above midpoint = buyer aggression
+                    is_buy_list.append(True)
+                    last_tick_direction = 1.0
+                elif trade_price < midpoint:
+                    # Trade below midpoint = seller aggression
+                    is_buy_list.append(False)
+                    last_tick_direction = 0.0
+                else:
+                    # Trade at midpoint - use tick rule
+                    if prev_price is not None:
+                        if trade_price > prev_price:
+                            is_buy_list.append(True)
+                            last_tick_direction = 1.0
+                        elif trade_price < prev_price:
+                            is_buy_list.append(False)
+                            last_tick_direction = 0.0
+                        else:
+                            # Same price - use last direction
+                            is_buy_list.append(last_tick_direction >= 0.5)
+                    else:
+                        is_buy_list.append(last_tick_direction >= 0.5)
+            else:
+                # No quote before this trade - use tick rule only
+                if prev_price is not None:
+                    if trade_price > prev_price:
+                        is_buy_list.append(True)
+                        last_tick_direction = 1.0
+                    elif trade_price < prev_price:
+                        is_buy_list.append(False)
+                        last_tick_direction = 0.0
+                    else:
+                        is_buy_list.append(last_tick_direction >= 0.5)
+                else:
+                    is_buy_list.append(True)  # Default first trade to buy
+            
+            prev_price = trade_price
+        
+        df["is_buy"] = is_buy_list
+        print(f"[LEE-READY] Classified {len(df)} trades using {len(qdf)} quotes")
+        
+    else:
+        # Fallback to tick rule if no quotes available
+        print(f"[TICK-RULE] No quotes available, using tick rule for {len(df)} trades")
+        df["price_change"] = df[price_col].diff()
+        
+        is_buy = []
+        last_direction = 0.5
+        
+        for i, row in df.iterrows():
+            change = row["price_change"]
+            if pd.isna(change) or change == 0:
+                is_buy.append(last_direction >= 0.5)
+            elif change > 0:
+                is_buy.append(True)
+                last_direction = 1.0
+            else:
+                is_buy.append(False)
+                last_direction = 0.0
+        
+        df["is_buy"] = is_buy
+    
+    # Count buys vs sells for debug
+    buy_count = df["is_buy"].sum()
+    sell_count = len(df) - buy_count
+    print(f"[CLASSIFY] {buy_count} buys, {sell_count} sells ({100*buy_count/len(df):.1f}% buy)")
+    
+    # =========================================
+    # REST OF ZONE COMPUTATION (same as before)
+    # =========================================
+    
+    # Create interval bars
+    interval_ms = interval_s * 1000
+    df["bar"] = (df[ts_col] // interval_ms).astype(int)
+    
+    if size_col not in df.columns:
+        df[size_col] = 100  # Default size
+    
+    # Zone classification
+    support = float(level_price)
+    above_ceil = support * (1.0 + above_pct / 100.0)
+    above_floor = support * (1.0 + on_pct / 100.0)
+    on_ceil = above_floor
+    on_floor = support * (1.0 - on_pct_down / 100.0)
+    below_ceil = on_floor
+    below_floor = support * (1.0 - below_pct / 100.0)
+    
+    def classify_zone(p: float) -> str:
+        if p >= above_floor and p <= above_ceil:
+            return "ABOVE"
+        if p >= on_floor and p < on_ceil:
+            return "ON"
+        if p >= below_floor and p < below_ceil:
+            return "BELOW"
+        return "OUT"
+    
+    df["zone"] = df[price_col].apply(classify_zone)
+    
+    # Count trades per bar for buy ratio calculation
+    trade_counts = df.groupby("bar").size().reset_index(name="trade_count")
+    
+    # Aggregate by bar
+    agg = df.groupby("bar").agg({
+        ts_col: ["min", "max"],
+        price_col: ["first", "last", "min", "max"],
+        size_col: "sum",
+        "is_buy": "sum",
+        "zone": "last",  # Zone at end of bar
+    }).reset_index()
+    
+    # Flatten columns
+    agg.columns = ["bar", "start_ts", "end_ts", "open", "close", "low", "high", "total_vol", "buy_count", "zone"]
+    
+    # Merge trade counts
+    agg = agg.merge(trade_counts, on="bar", how="left")
+    agg["trade_count"] = agg["trade_count"].fillna(1)
+    
+    # Estimate buy/sell volume (buy_count / trade_count × total_vol)
+    agg["buy_ratio"] = agg["buy_count"] / agg["trade_count"].clip(1)
+    agg["buy_ratio"] = agg["buy_ratio"].fillna(0.5).clip(0, 1)
+    agg["buy_vol"] = agg["total_vol"] * agg["buy_ratio"]
+    agg["sell_vol"] = agg["total_vol"] * (1 - agg["buy_ratio"])
+    agg["delta"] = agg["buy_vol"] - agg["sell_vol"]
+    
+    # Large trades (> 5000 shares) - institutional activity
+    large_threshold = 5000
+    large_df = df[df[size_col] >= large_threshold].copy() if size_col in df.columns else pd.DataFrame()
+    
+    if not large_df.empty:
+        # Separate buy and sell volumes for large trades
+        large_df["inst_buy_vol"] = large_df.apply(
+            lambda r: r[size_col] if r["is_buy"] else 0, axis=1
+        )
+        large_df["inst_sell_vol"] = large_df.apply(
+            lambda r: r[size_col] if not r["is_buy"] else 0, axis=1
+        )
+        
+        large_agg = large_df.groupby("bar").agg({
+            "inst_buy_vol": "sum",
+            "inst_sell_vol": "sum",
+        }).reset_index()
+        large_agg.columns = ["bar", "inst_buy", "inst_sell"]
+        agg = agg.merge(large_agg, on="bar", how="left")
+    
+    agg["inst_buy"] = agg.get("inst_buy", pd.Series([0] * len(agg))).fillna(0)
+    agg["inst_sell"] = agg.get("inst_sell", pd.Series([0] * len(agg))).fillna(0)
+
+    # ---------------------------------------------------------
+    # Per-band totals inside each bar (ABOVE/ON/BELOW/OUT)
+    # This answers "are there buyers/sellers ON my level band?"
+    # without relying on the bar's last-trade zone label.
+    # ---------------------------------------------------------
+    try:
+        size_series = df[size_col].astype(float)
+        is_buy_series = df["is_buy"].astype(bool)
+        large_threshold = 5000.0
+        is_large = size_series >= large_threshold
+
+        df["_buy_sz"] = size_series.where(is_buy_series, 0.0)
+        df["_sell_sz"] = size_series.where(~is_buy_series, 0.0)
+        df["_inst_buy_sz"] = size_series.where(is_large & is_buy_series, 0.0)
+        df["_inst_sell_sz"] = size_series.where(is_large & (~is_buy_series), 0.0)
+
+        band_agg = (
+            df.groupby(["bar", "zone"])
+            .agg(
+                band_total=(size_col, "sum"),
+                band_buy=("_buy_sz", "sum"),
+                band_sell=("_sell_sz", "sum"),
+                band_inst_buy=("_inst_buy_sz", "sum"),
+                band_inst_sell=("_inst_sell_sz", "sum"),
+            )
+            .unstack(fill_value=0.0)
+        )
+
+        # Flatten to: buy_vol_on, sell_vol_above, inst_buy_below, etc.
+        rename: dict[tuple[str, str], str] = {}
+        for (metric, zone) in band_agg.columns:
+            zl = str(zone).lower()
+            if metric == "band_total":
+                rename[(metric, zone)] = f"total_vol_{zl}"
+            elif metric == "band_buy":
+                rename[(metric, zone)] = f"buy_vol_{zl}"
+            elif metric == "band_sell":
+                rename[(metric, zone)] = f"sell_vol_{zl}"
+            elif metric == "band_inst_buy":
+                rename[(metric, zone)] = f"inst_buy_{zl}"
+            elif metric == "band_inst_sell":
+                rename[(metric, zone)] = f"inst_sell_{zl}"
+            else:
+                rename[(metric, zone)] = f"{metric}_{zl}"
+
+        band_agg = band_agg.rename(columns=rename).reset_index()
+        agg = agg.merge(band_agg, on="bar", how="left").fillna(0.0)
+    except Exception:
+        # Keep compatibility if anything goes wrong; "on the line" fields will be absent.
+        pass
+    
+    # Build segments (each bar is a segment for simplicity)
+    segments = []
+    for _, row in agg.iterrows():
+        buy_vol = float(row["buy_vol"])
+        sell_vol = float(row["sell_vol"])
+        delta = float(row["delta"])
+        total_vol = float(row["total_vol"])
+        inst_buy = float(row.get("inst_buy", 0))
+        inst_sell = float(row.get("inst_sell", 0))
+        tc = int(row.get("trade_count", 1))
+        
+        # Use VWAP-like price based on delta direction
+        # If buyers won, weight toward high; if sellers won, weight toward low
+        open_p = float(row["open"])
+        close_p = float(row["close"])
+        high_p = float(row["high"])
+        low_p = float(row["low"])
+        
+        if delta > 0:
+            # Buyers won - use close or weighted toward high
+            display_price = close_p
+        elif delta < 0:
+            # Sellers won - use close or weighted toward low
+            display_price = close_p
+        else:
+            display_price = (open_p + close_p) / 2
+        
+        segments.append({
+            "zone": row["zone"],
+            "start_ts_ms": int(row["start_ts"]),
+            "end_ts_ms": int(row["end_ts"]),
+            "start_price": open_p,
+            "end_price": close_p,
+            "display_price": display_price,
+            "low": low_p,
+            "high": high_p,
+            "buy_vol": buy_vol,
+            "sell_vol": sell_vol,
+            "delta": delta,
+            "inst_buy": inst_buy,
+            "inst_sell": inst_sell,
+            "inst_trades": 0,
+            "total_vol": total_vol,
+            "trade_count": tc,
+            "duration_s": interval_s,
+            "avg_trade_size": total_vol / tc if tc > 0 else 0,
+            "points": 1,
+            # Per-band totals inside the segment (may be all zeros if not computed)
+            "total_vol_above": float(row.get("total_vol_above", 0.0)),
+            "buy_vol_above": float(row.get("buy_vol_above", 0.0)),
+            "sell_vol_above": float(row.get("sell_vol_above", 0.0)),
+            "inst_buy_above": float(row.get("inst_buy_above", 0.0)),
+            "inst_sell_above": float(row.get("inst_sell_above", 0.0)),
+            "total_vol_on": float(row.get("total_vol_on", 0.0)),
+            "buy_vol_on": float(row.get("buy_vol_on", 0.0)),
+            "sell_vol_on": float(row.get("sell_vol_on", 0.0)),
+            "inst_buy_on": float(row.get("inst_buy_on", 0.0)),
+            "inst_sell_on": float(row.get("inst_sell_on", 0.0)),
+            "total_vol_below": float(row.get("total_vol_below", 0.0)),
+            "buy_vol_below": float(row.get("buy_vol_below", 0.0)),
+            "sell_vol_below": float(row.get("sell_vol_below", 0.0)),
+            "inst_buy_below": float(row.get("inst_buy_below", 0.0)),
+            "inst_sell_below": float(row.get("inst_sell_below", 0.0)),
+            "total_vol_out": float(row.get("total_vol_out", 0.0)),
+            "buy_vol_out": float(row.get("buy_vol_out", 0.0)),
+            "sell_vol_out": float(row.get("sell_vol_out", 0.0)),
+            "inst_buy_out": float(row.get("inst_buy_out", 0.0)),
+            "inst_sell_out": float(row.get("inst_sell_out", 0.0)),
+        })
+    
+    # Compute scores (simplified versions)
+    # Defense Score: how well is support defended?
+    below_segs = [s for s in segments if s["zone"] == "BELOW"]
+    on_segs = [s for s in segments if s["zone"] == "ON"]
+    above_segs = [s for s in segments if s["zone"] == "ABOVE"]
+    
+    # Defense = ON/BELOW have positive delta or low selling
+    below_buy = sum(s["buy_vol"] for s in below_segs)
+    below_sell = sum(s["sell_vol"] for s in below_segs)
+    on_buy = sum(s["buy_vol"] for s in on_segs)
+    on_sell = sum(s["sell_vol"] for s in on_segs)
+    
+    defense_score = 50  # Start neutral
+    if below_buy + on_buy > 0:
+        defense_score = min(100, int(100 * (below_buy + on_buy) / (below_buy + on_buy + below_sell + on_sell + 1)))
+    
+    # Aggression = ABOVE has positive delta
+    above_buy = sum(s["buy_vol"] for s in above_segs)
+    above_sell = sum(s["sell_vol"] for s in above_segs)
+    aggression_score = 50
+    if above_buy + above_sell > 0:
+        aggression_score = min(100, int(100 * above_buy / (above_buy + above_sell + 1)))
+    
+    # Market state
+    state = "MIXED"
+    action = "WAIT"
+    if defense_score >= 65 and aggression_score >= 70:
+        state = "BREAK_LIKELY"
+        action = "STARTER"
+    elif defense_score >= 65 and aggression_score < 50:
+        state = "DEFENSE_ONLY"
+        action = "WAIT"
+    elif defense_score >= 50:
+        state = "RECLAIM_DEVELOPING"
+        action = "WATCH"
+    elif defense_score < 40:
+        state = "BREAKDOWN_RISK"
+        action = "AVOID"
+    
+    return {
+        "zone_segments": segments,
+        "defense_score": {
+            "value": defense_score,
+            "reasons": [],
+        },
+        "aggression_score": {
+            "value": aggression_score,
+            "reasons": [],
+        },
+        "market_state": {
+            "state": state,
+            "action": action,
+            "reasons": [],
+        },
+        "distribution_pattern": {"detected": False, "reasons": []},
+        "late_momentum": {"bias": "neutral", "score": 0, "reasons": []},
+        "zone_analysis": {
+            "support_price": support,
+            "above_ceiling": above_ceil,
+            "below_floor": below_floor,
+        },
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class Store:
     root_dir: Path
 
     _DEFAULT_BAND_PCT: float = 0.0015  # 0.15% band for touch detection
     _DEFAULT_SNAPSHOT_INTERVAL_S: int = 10
+    _DEFAULT_ZONE_ABOVE_PCT: float = 5.0
+    _DEFAULT_ZONE_BELOW_PCT: float = 5.0
+    _DEFAULT_ZONE_ON_PCT: float = 1.5
+    _DEFAULT_ZONE_ON_PCT_DOWN: float = 2.0
 
     def _glob(self, kind: str, date: str, ticker: str, session_id: str) -> list[Path]:
         base = (
@@ -232,6 +784,1530 @@ class Store:
             return pd.DataFrame()
         # inclusive bounds (deterministic)
         return df[(df["timestamp"] >= int(start_ms)) & (df["timestamp"] <= int(end_ms))].copy()
+
+    def _compute_zone_metrics(
+        self,
+        *,
+        df: pd.DataFrame,
+        level_price: float,
+        start_ms: int,
+        end_ms: int,
+        interval_s: int,
+        above_pct: float | None = None,
+        below_pct: float | None = None,
+        on_pct: float | None = None,
+        on_pct_down: float | None = None,
+    ) -> dict[str, Any]:
+        win = self._window_df(df, start_ms, end_ms)
+        if win.empty:
+            return {"error": "no data in window"}
+        if "last_price" not in win.columns:
+            return {"error": "missing last_price"}
+
+        win = win.sort_values(["timestamp"], kind="mergesort").reset_index(drop=True)
+        price = pd.to_numeric(win["last_price"], errors="coerce")
+        ts = pd.to_numeric(win["timestamp"], errors="coerce")
+
+        a = float(above_pct if above_pct is not None else self._DEFAULT_ZONE_ABOVE_PCT)
+        b = float(below_pct if below_pct is not None else self._DEFAULT_ZONE_BELOW_PCT)
+        o_up = float(on_pct if on_pct is not None else self._DEFAULT_ZONE_ON_PCT)
+        o_dn = float(on_pct_down if on_pct_down is not None else self._DEFAULT_ZONE_ON_PCT_DOWN)
+
+        above_ceiling = level_price * (1.0 + a / 100.0)
+        above_floor = level_price * (1.0 + o_up / 100.0)
+        on_ceiling = above_floor
+        on_floor = level_price * (1.0 - o_dn / 100.0)
+        below_ceiling = on_floor
+        below_floor = level_price * (1.0 - b / 100.0)
+
+        zone = pd.Series("OUT", index=win.index)
+        mask_above = (price >= above_floor) & (price <= above_ceiling)
+        mask_on = (price >= on_floor) & (price < on_ceiling)
+        mask_below = (price >= below_floor) & (price < below_ceiling)
+        zone = zone.where(~mask_above, "ABOVE")
+        zone = zone.where(~mask_on, "ON")
+        zone = zone.where(~mask_below, "BELOW")
+
+        def _sum_col(col: str, mask: pd.Series) -> float:
+            if col not in win.columns:
+                return 0.0
+            vals = pd.to_numeric(win[col], errors="coerce").fillna(0)
+            return float(vals[mask].sum())
+
+        def _zone_stats(z: str) -> dict[str, Any]:
+            mask = zone == z
+            points = int(mask.sum())
+            return {
+                "points": points,
+                "duration_s": int(points) * int(interval_s),
+                "total_volume_sum": _sum_col("total_volume", mask),
+                "buy_volume_sum": _sum_col("buy_volume", mask),
+                "sell_volume_sum": _sum_col("sell_volume", mask),
+                "delta_sum": _sum_col("delta", mask),
+                "inst_buy_volume_sum": _sum_col("large_buy_volume_10s", mask),
+                "inst_sell_volume_sum": _sum_col("large_sell_volume_10s", mask),
+                "inst_trade_count_sum": _sum_col("large_trade_count_10s", mask),
+            }
+
+        zones = {z: _zone_stats(z) for z in ("BELOW", "ON", "ABOVE", "OUT")}
+        below_inst_buy = zones["BELOW"]["inst_buy_volume_sum"]
+        below_inst_sell = zones["BELOW"]["inst_sell_volume_sum"]
+        below_inst_ratio = (
+            float(below_inst_buy) / float(below_inst_buy + below_inst_sell)
+            if (below_inst_buy + below_inst_sell) > 0
+            else None
+        )
+
+        # Zone transitions and velocity
+        zone_shift = zone != zone.shift(1)
+        transitions = int(zone_shift.fillna(False).sum() - 1) if len(zone) > 0 else 0
+
+        def _first_ts(mask: pd.Series) -> int | None:
+            if not mask.any():
+                return None
+            return int(ts[mask].iloc[0])
+
+        first_below_ts = _first_ts(zone == "BELOW")
+        first_on_after_below_ts = None
+        first_above_after_on_ts = None
+        first_above_after_below_ts = None
+
+        if first_below_ts is not None:
+            after_below = ts > first_below_ts
+            first_on_after_below_ts = _first_ts((zone == "ON") & after_below)
+            first_above_after_below_ts = _first_ts((zone == "ABOVE") & after_below)
+            if first_on_after_below_ts is not None:
+                after_on = ts > first_on_after_below_ts
+                first_above_after_on_ts = _first_ts((zone == "ABOVE") & after_on)
+
+        time_below_to_on_s = (
+            (first_on_after_below_ts - first_below_ts) / 1000.0
+            if first_below_ts is not None and first_on_after_below_ts is not None
+            else None
+        )
+        time_on_to_above_s = (
+            (first_above_after_on_ts - first_on_after_below_ts) / 1000.0
+            if first_on_after_below_ts is not None and first_above_after_on_ts is not None
+            else None
+        )
+        time_below_to_above_s = (
+            (first_above_after_below_ts - first_below_ts) / 1000.0
+            if first_below_ts is not None and first_above_after_below_ts is not None
+            else None
+        )
+
+        # SOAK: deep below then recover to ON or above
+        deep_below_threshold = level_price * 0.98
+        recover_threshold = level_price * 0.998
+        deep_mask = price <= deep_below_threshold
+        deep_ts = _first_ts(deep_mask)
+        recover_ts = None
+        if deep_ts is not None:
+            recover_ts = _first_ts((price >= recover_threshold) & (ts > deep_ts))
+        soak_confirmed = deep_ts is not None and recover_ts is not None
+        soak_time_to_recover_s = (
+            (recover_ts - deep_ts) / 1000.0 if soak_confirmed else None
+        )
+
+        return {
+            "bounds": {
+                "support": float(level_price),
+                "above_floor": float(above_floor),
+                "above_ceiling": float(above_ceiling),
+                "on_floor": float(on_floor),
+                "on_ceiling": float(on_ceiling),
+                "below_floor": float(below_floor),
+                "below_ceiling": float(below_ceiling),
+            },
+            "zones": zones,
+            "below_inst_buy_ratio": below_inst_ratio,
+            "transitions": transitions,
+            "velocity": {
+                "first_below_ts_ms": first_below_ts,
+                "first_on_ts_ms": first_on_after_below_ts,
+                "first_above_ts_ms": first_above_after_on_ts,
+                "first_above_after_below_ts_ms": first_above_after_below_ts,
+                "time_below_to_on_s": time_below_to_on_s,
+                "time_on_to_above_s": time_on_to_above_s,
+                "time_below_to_above_s": time_below_to_above_s,
+            },
+            "soak": {
+                "confirmed": bool(soak_confirmed),
+                "deep_below_threshold": float(deep_below_threshold),
+                "recover_threshold": float(recover_threshold),
+                "first_deep_ts_ms": deep_ts,
+                "recover_ts_ms": recover_ts,
+                "time_to_recover_s": soak_time_to_recover_s,
+            },
+        }
+
+    def _compute_last_minutes_bias(
+        self,
+        *,
+        df: pd.DataFrame,
+        end_ms: int,
+        minutes: int,
+    ) -> dict[str, Any]:
+        if df.empty or "timestamp" not in df.columns:
+            return {"error": "missing data"}
+        start_ms = int(end_ms) - int(minutes * 60_000)
+        win = self._window_df(df, start_ms, end_ms)
+        if win.empty:
+            return {"error": "no data in window"}
+
+        def _sum(col: str) -> float:
+            if col not in win.columns:
+                return 0.0
+            return float(pd.to_numeric(win[col], errors="coerce").fillna(0).sum())
+
+        buy = _sum("buy_volume")
+        sell = _sum("sell_volume")
+        inst_buy = _sum("large_buy_volume_10s")
+        inst_sell = _sum("large_sell_volume_10s")
+        delta = buy - sell
+        if buy > sell * 1.1:
+            winner = "BUYERS"
+        elif sell > buy * 1.1:
+            winner = "SELLERS"
+        else:
+            winner = "EVEN"
+
+        return {
+            "window_start_ts_ms": int(start_ms),
+            "window_end_ts_ms": int(end_ms),
+            "buy_vol": buy,
+            "sell_vol": sell,
+            "delta": delta,
+            "inst_buy_vol": inst_buy,
+            "inst_sell_vol": inst_sell,
+            "winner": winner,
+        }
+
+    def _classify_zone(
+        self,
+        *,
+        price: float,
+        support: float,
+        above_pct: float,
+        below_pct: float,
+        on_pct: float,
+        on_pct_down: float,
+    ) -> str:
+        above_ceiling = support * (1.0 + above_pct / 100.0)
+        above_floor = support * (1.0 + on_pct / 100.0)
+        on_ceiling = above_floor
+        on_floor = support * (1.0 - on_pct_down / 100.0)
+        below_ceiling = on_floor
+        below_floor = support * (1.0 - below_pct / 100.0)
+
+        if price >= above_floor and price <= above_ceiling:
+            return "ABOVE"
+        if price >= on_floor and price < on_ceiling:
+            return "ON"
+        if price >= below_floor and price < below_ceiling:
+            return "BELOW"
+        return "OUT"
+
+    def _compute_zone_segments(
+        self,
+        *,
+        df: pd.DataFrame,
+        level_price: float,
+        start_ms: int,
+        end_ms: int,
+        interval_s: int,
+        above_pct: float,
+        below_pct: float,
+        on_pct: float,
+        on_pct_down: float,
+    ) -> list[dict[str, Any]]:
+        win = self._window_df(df, start_ms, end_ms)
+        if win.empty or "timestamp" not in win.columns or "last_price" not in win.columns:
+            return []
+        win = win.sort_values(["timestamp"], kind="mergesort").reset_index(drop=True)
+
+        def _num(col: str) -> pd.Series:
+            if col not in win.columns:
+                return pd.Series([0.0] * len(win))
+            return pd.to_numeric(win[col], errors="coerce").fillna(0.0)
+
+        price = pd.to_numeric(win["last_price"], errors="coerce")
+        ts = pd.to_numeric(win["timestamp"], errors="coerce")
+        buy = _num("buy_volume")
+        sell = _num("sell_volume")
+        delta = _num("delta")
+        inst_buy = _num("large_buy_volume_10s")
+        inst_sell = _num("large_sell_volume_10s")
+        inst_trades = _num("large_trade_count_10s")
+        total_vol = _num("total_volume")
+        trade_count = _num("trade_count")
+        low_col = (
+            pd.to_numeric(win["low_10s"], errors="coerce")
+            if "low_10s" in win.columns
+            else price
+        )
+        high_col = (
+            pd.to_numeric(win["high_10s"], errors="coerce")
+            if "high_10s" in win.columns
+            else price
+        )
+
+        zones = []
+        for i in range(len(win)):
+            p = float(price.iloc[i]) if pd.notna(price.iloc[i]) else None
+            if p is None:
+                zones.append("OUT")
+            else:
+                zones.append(
+                    self._classify_zone(
+                        price=p,
+                        support=float(level_price),
+                        above_pct=float(above_pct),
+                        below_pct=float(below_pct),
+                        on_pct=float(on_pct),
+                        on_pct_down=float(on_pct_down),
+                    )
+                )
+
+        segments: list[dict[str, Any]] = []
+        if not zones:
+            return segments
+
+        def _start_segment(idx: int, zone: str) -> dict[str, Any]:
+            p = float(price.iloc[idx]) if pd.notna(price.iloc[idx]) else 0.0
+            b = float(buy.iloc[idx])
+            s = float(sell.iloc[idx])
+            return {
+                "zone": zone,
+                "start_ts_ms": int(ts.iloc[idx]) if pd.notna(ts.iloc[idx]) else None,
+                "end_ts_ms": int(ts.iloc[idx]) if pd.notna(ts.iloc[idx]) else None,
+                "start_price": p if p else None,
+                "end_price": p if p else None,
+                "low": float(low_col.iloc[idx]) if pd.notna(low_col.iloc[idx]) else None,
+                "high": float(high_col.iloc[idx]) if pd.notna(high_col.iloc[idx]) else None,
+                "buy_vol": b,
+                "sell_vol": s,
+                "delta": float(delta.iloc[idx]),
+                "inst_buy": float(inst_buy.iloc[idx]),
+                "inst_sell": float(inst_sell.iloc[idx]),
+                "inst_trades": float(inst_trades.iloc[idx]),
+                "total_vol": float(total_vol.iloc[idx]),
+                "trade_count": float(trade_count.iloc[idx]),
+                "points": 1,
+                # Track individual rows for Winner's Price calculation
+                "_rows": [(p, b, s)] if p else [],
+            }
+
+        def _add_row(seg: dict[str, Any], idx: int) -> None:
+            p = float(price.iloc[idx]) if pd.notna(price.iloc[idx]) else None
+            b = float(buy.iloc[idx])
+            s = float(sell.iloc[idx])
+            seg["end_ts_ms"] = int(ts.iloc[idx]) if pd.notna(ts.iloc[idx]) else seg["end_ts_ms"]
+            seg["end_price"] = p if p else seg["end_price"]
+            if pd.notna(low_col.iloc[idx]):
+                seg["low"] = (
+                    float(low_col.iloc[idx])
+                    if seg["low"] is None
+                    else min(seg["low"], float(low_col.iloc[idx]))
+                )
+            if pd.notna(high_col.iloc[idx]):
+                seg["high"] = (
+                    float(high_col.iloc[idx])
+                    if seg["high"] is None
+                    else max(seg["high"], float(high_col.iloc[idx]))
+                )
+            seg["buy_vol"] += b
+            seg["sell_vol"] += s
+            seg["delta"] += float(delta.iloc[idx])
+            seg["inst_buy"] += float(inst_buy.iloc[idx])
+            seg["inst_sell"] += float(inst_sell.iloc[idx])
+            seg["inst_trades"] += float(inst_trades.iloc[idx])
+            seg["total_vol"] += float(total_vol.iloc[idx])
+            seg["trade_count"] += float(trade_count.iloc[idx])
+            seg["points"] += 1
+            # Track for Winner's Price
+            if p:
+                seg["_rows"].append((p, b, s))
+
+        # Create segments based on zone transitions AND time intervals
+        # Each segment is max interval_s seconds (default 10s), or until zone changes
+        interval_ms = interval_s * 1000
+        current = _start_segment(0, zones[0])
+        for i in range(1, len(zones)):
+            current_ts = int(ts.iloc[i]) if pd.notna(ts.iloc[i]) else 0
+            start_ts = current.get("start_ts_ms") or 0
+            time_elapsed = current_ts - start_ts
+            
+            # Start new segment if zone changes OR time exceeds interval
+            if zones[i] != current["zone"] or time_elapsed >= interval_ms:
+                segments.append(current)
+                current = _start_segment(i, zones[i])
+            else:
+                _add_row(current, i)
+        segments.append(current)
+
+        def _compute_winner_price(seg: dict[str, Any]) -> float:
+            """
+            Compute display price based on winning side's activity.
+            Rule: If #1 >= #2 × 1.5 → leader's price, else weighted avg of top 3.
+            """
+            rows = seg.get("_rows", [])
+            if not rows:
+                return seg.get("end_price") or seg.get("start_price") or 0.0
+            
+            # Determine winner: buyers (delta > 0) or sellers (delta < 0)
+            seg_delta = seg.get("delta", 0)
+            is_buyer_win = seg_delta >= 0
+            
+            # Extract (price, winning_vol) pairs
+            if is_buyer_win:
+                # Sort by buy volume descending
+                ranked = sorted([(p, b) for p, b, s in rows if b > 0], key=lambda x: -x[1])
+            else:
+                # Sort by sell volume descending
+                ranked = sorted([(p, s) for p, b, s in rows if s > 0], key=lambda x: -x[1])
+            
+            if not ranked:
+                return seg.get("end_price") or seg.get("start_price") or 0.0
+            
+            if len(ranked) == 1:
+                return ranked[0][0]  # Only one row, use its price
+            
+            top1_price, top1_vol = ranked[0]
+            top2_price, top2_vol = ranked[1]
+            
+            # Leader rule: #1 >= #2 × 1.5
+            if top1_vol >= top2_vol * 1.5:
+                return top1_price
+            
+            # Otherwise: weighted average of top 3
+            top3 = ranked[:3]
+            total_vol = sum(v for _, v in top3)
+            if total_vol == 0:
+                return top1_price
+            
+            weighted_price = sum(p * v for p, v in top3) / total_vol
+            return weighted_price
+
+        for seg in segments:
+            seg["duration_s"] = int(seg.get("points", 0)) * int(interval_s)
+            tc = float(seg.get("trade_count") or 0)
+            seg["avg_trade_size"] = (
+                float(seg["total_vol"]) / tc if tc > 0 else None
+            )
+            # Compute Winner's Price for dot positioning
+            seg["display_price"] = _compute_winner_price(seg)
+            # Clean up internal tracking
+            seg.pop("_rows", None)
+
+        return segments
+
+    def _annotate_zone_segments(
+        self,
+        *,
+        segments: list[dict[str, Any]],
+        zone_analysis: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if not segments:
+            return []
+        annotations: list[list[str]] = [[] for _ in segments]
+
+        for i, seg in enumerate(segments):
+            zone = seg.get("zone")
+            buy = float(seg.get("buy_vol") or 0)
+            sell = float(seg.get("sell_vol") or 0)
+            delta = float(seg.get("delta") or 0)
+            inst_buy = float(seg.get("inst_buy") or 0)
+            inst_sell = float(seg.get("inst_sell") or 0)
+            total = float(seg.get("total_vol") or 0)
+
+            if zone == "BELOW" and sell > buy * 2:
+                annotations[i].append(
+                    "Heavy selling below support at ${}".format(
+                        f"{seg.get('start_price'):.4f}" if seg.get("start_price") else "?"
+                    )
+                )
+            if zone == "BELOW" and buy > sell:
+                annotations[i].append(
+                    "Buyers accumulating at ${}".format(
+                        f"{seg.get('start_price'):.4f}" if seg.get("start_price") else "?"
+                    )
+                )
+            if zone == "ABOVE" and delta > 0 and inst_sell < inst_buy * 1.2:
+                annotations[i].append("Light resistance above, clean air")
+            if zone == "ABOVE" and delta < 0 and inst_sell > inst_buy * 1.2:
+                annotations[i].append("Heavy resistance above, sellers defending")
+
+            if total > 0 and i > 0:
+                prev_total = float(segments[i - 1].get("total_vol") or 0)
+                if total < prev_total * 0.8:
+                    annotations[i].append("Volume declining vs prior segment")
+
+            if i > 0:
+                prev_delta = float(segments[i - 1].get("delta") or 0)
+                if prev_delta < 0 and delta > 0:
+                    annotations[i].append("Momentum shifted to buyers")
+
+        soak = zone_analysis.get("soak", {}) if isinstance(zone_analysis, dict) else {}
+        if soak.get("confirmed"):
+            for i, seg in enumerate(segments):
+                if seg.get("zone") in {"ON", "ABOVE"}:
+                    annotations[i].append("SOAK confirmed - reclaimed support")
+                    break
+
+        return [
+            {**seg, "annotations": annotations[idx]}
+            for idx, seg in enumerate(segments)
+        ]
+
+    def _compute_additional_signals(
+        self,
+        *,
+        segments: list[dict[str, Any]],
+        zone_analysis: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not segments:
+            return {}
+
+        # INST timing: leading if INST_BUY in BELOW before first ON
+        first_on_idx = next((i for i, s in enumerate(segments) if s.get("zone") == "ON"), None)
+        below_before_on = []
+        below_after_on = []
+        for i, s in enumerate(segments):
+            if s.get("zone") != "BELOW":
+                continue
+            if first_on_idx is not None and i < first_on_idx:
+                below_before_on.append(s)
+            else:
+                below_after_on.append(s)
+        inst_leading = any((s.get("inst_buy") or 0) > 0 for s in below_before_on)
+        inst_chasing = not inst_leading and any((s.get("inst_buy") or 0) > 0 for s in below_after_on)
+        inst_timing = "leading" if inst_leading else "chasing" if inst_chasing else "neutral"
+
+        # Volume trend per zone (compare first to last)
+        def _trend(zone: str) -> str:
+            zsegs = [s for s in segments if s.get("zone") == zone]
+            if len(zsegs) < 2:
+                return "n/a"
+            first = float(zsegs[0].get("total_vol") or 0)
+            last = float(zsegs[-1].get("total_vol") or 0)
+            if last > first * 1.2:
+                return "increasing"
+            if last < first * 0.8:
+                return "decreasing"
+            return "flat"
+
+        volume_trend = {
+            "BELOW": _trend("BELOW"),
+            "ON": _trend("ON"),
+            "ABOVE": _trend("ABOVE"),
+        }
+
+        # Price velocity from zone_analysis
+        velocity = zone_analysis.get("velocity", {}) if isinstance(zone_analysis, dict) else {}
+        t_below_on = velocity.get("time_below_to_on_s")
+        t_on_above = velocity.get("time_on_to_above_s")
+        price_velocity = "n/a"
+        if isinstance(t_below_on, (int, float)) and isinstance(t_on_above, (int, float)):
+            if t_below_on <= 60 and t_on_above <= 60:
+                price_velocity = "fast"
+            elif t_below_on >= 180 or t_on_above >= 180:
+                price_velocity = "slow"
+            else:
+                price_velocity = "mixed"
+
+        # Repeat tests of BELOW
+        below_tests = [s for s in segments if s.get("zone") == "BELOW"]
+        repeat_tests = {
+            "count": len(below_tests),
+            "trend": "n/a",
+        }
+        if len(below_tests) >= 2:
+            deltas = [float(s.get("delta") or 0) for s in below_tests]
+            if deltas[-1] > deltas[0]:
+                repeat_tests["trend"] = "stronger"
+            elif deltas[-1] < deltas[0]:
+                repeat_tests["trend"] = "weaker"
+            else:
+                repeat_tests["trend"] = "flat"
+
+        # Delta acceleration overall
+        delta_accel = "n/a"
+        if len(segments) >= 2:
+            deltas = [float(s.get("delta") or 0) for s in segments[-3:]]
+            if len(deltas) >= 2 and deltas[-1] > deltas[-2]:
+                delta_accel = "improving"
+            elif len(deltas) >= 2 and deltas[-1] < deltas[-2]:
+                delta_accel = "worsening"
+            else:
+                delta_accel = "flat"
+
+        # Trade size trend
+        avg_sizes = [
+            s.get("avg_trade_size")
+            for s in segments
+            if s.get("avg_trade_size") is not None
+        ]
+        trade_size_trend = "n/a"
+        if len(avg_sizes) >= 2:
+            if avg_sizes[-1] > avg_sizes[0] * 1.2:
+                trade_size_trend = "larger"
+            elif avg_sizes[-1] < avg_sizes[0] * 0.8:
+                trade_size_trend = "smaller"
+            else:
+                trade_size_trend = "flat"
+
+        # Time of day (Chicago) from first segment start
+        time_of_day = "n/a"
+        try:
+            from datetime import datetime, timezone
+            import pytz
+
+            ts0 = segments[0].get("start_ts_ms")
+            if ts0:
+                dt = datetime.fromtimestamp(int(ts0) / 1000, tz=timezone.utc)
+                chicago = pytz.timezone("America/Chicago")
+                local = dt.astimezone(chicago)
+                hm = local.hour + local.minute / 60.0
+                if 9.5 <= hm < 10.5:
+                    time_of_day = "open"
+                elif 10.5 <= hm < 14.5:
+                    time_of_day = "midday"
+                elif 14.5 <= hm <= 16.0:
+                    time_of_day = "power_hour"
+                else:
+                    time_of_day = "off_hours"
+        except Exception:
+            time_of_day = "n/a"
+
+        return {
+            "inst_timing": inst_timing,
+            "volume_trend": volume_trend,
+            "price_velocity": price_velocity,
+            "repeat_tests": repeat_tests,
+            "time_of_day": time_of_day,
+            "delta_acceleration": delta_accel,
+            "trade_size_trend": trade_size_trend,
+        }
+
+    def _compute_risk_reward(
+        self,
+        *,
+        level_price: float,
+        zone_analysis: dict[str, Any],
+        segments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        below_lows = [s.get("low") for s in segments if s.get("zone") == "BELOW" and s.get("low") is not None]
+        stop_level = min(below_lows) if below_lows else None
+        above_ceiling = None
+        try:
+            above_ceiling = float(zone_analysis.get("bounds", {}).get("above_ceiling"))
+        except Exception:
+            above_ceiling = None
+        risk = float(level_price - stop_level) if stop_level is not None else None
+        reward = float(above_ceiling - level_price) if above_ceiling is not None else None
+        rr = None
+        if risk is not None and reward is not None and risk > 0:
+            rr = float(reward / risk)
+        return {
+            "stop_level": stop_level,
+            "target": above_ceiling,
+            "risk": risk,
+            "reward": reward,
+            "rr": rr,
+        }
+
+    def _compute_final_verdict(
+        self,
+        *,
+        zone_analysis: dict[str, Any],
+        additional: dict[str, Any],
+        segments: list[dict[str, Any]],
+        risk_reward: dict[str, Any],
+    ) -> dict[str, Any]:
+        soak = bool(zone_analysis.get("soak", {}).get("confirmed"))
+        zones = zone_analysis.get("zones", {})
+        above = zones.get("ABOVE", {})
+        above_delta = float(above.get("delta_sum") or 0)
+        above_inst_sell = float(above.get("inst_sell_volume_sum") or 0)
+        above_inst_buy = float(above.get("inst_buy_volume_sum") or 0)
+        above_total = float(above.get("total_volume_sum") or 0)
+        clean_above = above_delta > 0 and above_inst_sell < max(above_inst_buy * 1.2, above_total * 0.2)
+        heavy_above = above_delta < 0 and above_inst_sell > above_inst_buy * 1.2
+
+        below_inst_buy = float(zones.get("BELOW", {}).get("inst_buy_volume_sum") or 0)
+        below_inst_sell = float(zones.get("BELOW", {}).get("inst_sell_volume_sum") or 0)
+        on_inst_buy = float(zones.get("ON", {}).get("inst_buy_volume_sum") or 0)
+        on_inst_sell = float(zones.get("ON", {}).get("inst_sell_volume_sum") or 0)
+        inst_buy_below = below_inst_buy > below_inst_sell * 1.1
+        inst_buy_on = on_inst_buy > on_inst_sell * 1.1
+        inst_buy_above = above_inst_buy > above_inst_sell * 1.1
+        inst_buy_across_zones = inst_buy_below and inst_buy_on and inst_buy_above
+
+        last_3m = zone_analysis.get("last_minutes", {}).get("last_3m", {})
+        last_winner = last_3m.get("winner")
+        inst_timing = additional.get("inst_timing")
+
+        confidence = "WAIT"
+        reason: list[str] = []
+
+        def _downgrade(current: str, target: str) -> str:
+            order = ["AVOID", "WAIT", "LEAN_LONG", "STRONG_LONG"]
+            if current not in order or target not in order:
+                return current
+            return target if order.index(current) > order.index(target) else current
+
+        if soak and clean_above and last_winner == "BUYERS" and inst_timing == "leading":
+            confidence = "STRONG_LONG"
+            reason.append("SOAK + clean ABOVE + buyers late + INST leading")
+        elif soak and clean_above and last_winner in {"EVEN", "BUYERS"}:
+            confidence = "LEAN_LONG"
+            reason.append("SOAK + clean ABOVE + mixed/positive late flow")
+        elif soak and last_winner == "SELLERS":
+            confidence = "WAIT"
+            reason.append("SOAK but sellers still active late")
+        elif (not soak or heavy_above or inst_timing == "chasing") and not inst_buy_across_zones:
+            confidence = "AVOID"
+            reason.append("No SOAK or heavy ABOVE resistance / INST selling")
+
+        if inst_buy_across_zones and last_winner != "SELLERS":
+            confidence = _downgrade(confidence, "LEAN_LONG")
+            reason.append("INST buying across zones")
+        elif confidence == "WAIT" and last_winner != "SELLERS" and (inst_buy_on or inst_buy_above):
+            confidence = _downgrade(confidence, "LEAN_LONG")
+            reason.append("INST buying in ON/ABOVE")
+
+        rr = risk_reward.get("rr")
+        rr_blocked = False
+        if isinstance(rr, (int, float)) and rr < 1.0:
+            confidence = _downgrade(confidence, "WAIT")
+            rr_blocked = True
+            reason.append("R:R below 1.0")
+
+        repeat = additional.get("repeat_tests", {})
+        if repeat.get("count", 0) >= 10 and repeat.get("trend") == "weaker":
+            confidence = _downgrade(confidence, "WAIT")
+            reason.append("Level exhausted after 10+ weaker tests")
+
+        for seg in segments[-10:]:
+            inst_sell = float(seg.get("inst_sell") or 0)
+            inst_buy = float(seg.get("inst_buy") or 0)
+            if inst_sell > 10000 and inst_buy == 0:
+                confidence = _downgrade(confidence, "WAIT")
+                reason.append("Late INST sell dump detected")
+                break
+
+        if additional.get("delta_acceleration") == "worsening":
+            if confidence == "STRONG_LONG":
+                confidence = "LEAN_LONG"
+            reason.append("Delta acceleration worsening")
+
+        vol_trend = additional.get("volume_trend", {})
+        trends = [v for v in vol_trend.values() if v != "n/a"]
+        if trends and all(v == "decreasing" for v in trends):
+            confidence = _downgrade(confidence, "WAIT")
+            reason.append("Volume declining across all zones")
+
+        if segments and segments[-1].get("zone") == "OUT" and float(segments[-1].get("delta") or 0) < 0:
+            reason.append("Ended outside zones with negative delta")
+
+        # Late momentum override (flag only if R:R blocked)
+        late_momentum = False
+        if len(segments) >= 3:
+            last_3 = segments[-3:]
+            late_delta = sum(float(s.get("delta") or 0) for s in last_3)
+            if late_delta > 200000 and all(float(s.get("delta") or 0) > 0 for s in last_3):
+                late_momentum = True
+                if not rr_blocked:
+                    confidence = _downgrade(confidence, "LEAN_LONG")
+                reason.append("Strong late buyer momentum")
+                if rr_blocked and isinstance(rr, (int, float)):
+                    reason.append(f"Late momentum detected, but R:R is {rr:.2f}")
+
+        # Accumulation counter: do not allow AVOID if repeated accumulation
+        accumulation_count = 0
+        for s in segments:
+            anns = s.get("annotations") or []
+            if any("Buyers accumulating" in a for a in anns):
+                accumulation_count += 1
+        if accumulation_count >= 3:
+            reason.append(f"Buyers accumulated {accumulation_count}x")
+            if confidence == "AVOID":
+                confidence = "WAIT"
+
+        # Tighter stop suggestion if R:R blocked and late momentum present
+        rr_suggestion = None
+        if rr_blocked and late_momentum:
+            target = risk_reward.get("target")
+            if isinstance(target, (int, float)):
+                desired_rr = 1.5
+                stop_tighter = float(target) - (float(target) - float(zone_analysis.get("bounds", {}).get("support", 0.0))) / desired_rr
+                rr_suggestion = {
+                    "desired_rr": desired_rr,
+                    "suggested_stop": stop_tighter,
+                }
+
+        return {
+            "confidence": confidence,
+            "reasons": reason,
+            "rr_blocked": rr_blocked,
+            "rr_suggestion": rr_suggestion,
+        }
+
+    def _compute_trade_trigger(
+        self,
+        *,
+        level_price: float,
+        risk_reward: dict[str, Any],
+        zone_analysis: dict[str, Any],
+    ) -> str | None:
+        stop = risk_reward.get("stop_level")
+        target = risk_reward.get("target")
+        reclaim = None
+        try:
+            reclaim = float(zone_analysis.get("bounds", {}).get("on_floor"))
+        except Exception:
+            reclaim = None
+        if stop is None or target is None or reclaim is None:
+            return None
+        return (
+            "Enter when price reclaims ${} with buyer delta, stop at ${}, target ${}".format(
+                f"{reclaim:.4f}", f"{float(stop):.4f}", f"{float(target):.4f}"
+            )
+        )
+
+    def _compute_role_behavior(
+        self,
+        *,
+        zone_analysis: dict[str, Any],
+        segments: list[dict[str, Any]],
+        level_kind: str | None,
+    ) -> dict[str, Any]:
+        zones = zone_analysis.get("zones", {}) if isinstance(zone_analysis, dict) else {}
+        below = zones.get("BELOW", {})
+        above = zones.get("ABOVE", {})
+        last_3m = zone_analysis.get("last_minutes", {}).get("last_3m", {})
+        bounds = zone_analysis.get("bounds", {})
+
+        support_score = 0
+        resistance_score = 0
+        reasons_support: list[str] = []
+        reasons_resistance: list[str] = []
+
+        below_delta = float(below.get("delta_sum") or 0)
+        below_inst_buy = float(below.get("inst_buy_volume_sum") or 0)
+        below_inst_sell = float(below.get("inst_sell_volume_sum") or 0)
+        above_delta = float(above.get("delta_sum") or 0)
+        above_inst_buy = float(above.get("inst_buy_volume_sum") or 0)
+        above_inst_sell = float(above.get("inst_sell_volume_sum") or 0)
+
+        if below_delta > 0:
+            support_score += 1
+            reasons_support.append("below_delta_positive")
+        if below_inst_buy > below_inst_sell:
+            support_score += 1
+            reasons_support.append("below_inst_buying")
+        if bool(zone_analysis.get("soak", {}).get("confirmed")):
+            support_score += 1
+            reasons_support.append("soak_confirmed")
+        if last_3m.get("winner") == "BUYERS":
+            support_score += 1
+            reasons_support.append("late_buyers")
+
+        if above_delta < 0:
+            resistance_score += 1
+            reasons_resistance.append("above_delta_negative")
+        if above_inst_sell > above_inst_buy:
+            resistance_score += 1
+            reasons_resistance.append("above_inst_selling")
+        if last_3m.get("winner") == "SELLERS":
+            resistance_score += 1
+            reasons_resistance.append("late_sellers")
+
+        above_ceiling = None
+        below_floor = None
+        try:
+            above_ceiling = float(bounds.get("above_ceiling"))
+            below_floor = float(bounds.get("below_floor"))
+        except Exception:
+            above_ceiling = None
+            below_floor = None
+
+        # Failed breakout: OUT above ceiling then back inside
+        if above_ceiling is not None and segments:
+            saw_out_above = False
+            for seg in segments:
+                if seg.get("zone") == "OUT" and seg.get("high") is not None and float(seg.get("high")) >= above_ceiling:
+                    saw_out_above = True
+                    continue
+                if saw_out_above and seg.get("zone") in {"ABOVE", "ON", "BELOW"}:
+                    resistance_score += 1
+                    reasons_resistance.append("failed_breakout")
+                    break
+
+        # Failed breakdown: OUT below floor then back inside
+        if below_floor is not None and segments:
+            saw_out_below = False
+            for seg in segments:
+                if seg.get("zone") == "OUT" and seg.get("low") is not None and float(seg.get("low")) <= below_floor:
+                    saw_out_below = True
+                    continue
+                if saw_out_below and seg.get("zone") in {"BELOW", "ON", "ABOVE"}:
+                    support_score += 1
+                    reasons_support.append("failed_breakdown")
+                    break
+
+        if support_score > resistance_score:
+            role = "support"
+        elif resistance_score > support_score:
+            role = "resistance"
+        else:
+            role = "mixed"
+
+        diff = abs(support_score - resistance_score)
+        if diff >= 2:
+            confidence = "high"
+        elif diff >= 1:
+            confidence = "med"
+        else:
+            confidence = "low"
+
+        mismatch = False
+        if level_kind and role in {"support", "resistance"}:
+            mismatch = str(level_kind).lower() != role
+
+        return {
+            "role": role,
+            "confidence": confidence,
+            "support_score": support_score,
+            "resistance_score": resistance_score,
+            "support_reasons": reasons_support,
+            "resistance_reasons": reasons_resistance,
+            "mismatch": mismatch,
+        }
+
+    # =========================================================================
+    # DEFENSE SCORE (DS) / AGGRESSION SCORE (AS) / STATE MACHINE
+    # =========================================================================
+
+    def _compute_defense_score(
+        self,
+        *,
+        segments: list[dict[str, Any]],
+        zone_analysis: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Defense Score (DS): How well is support being defended?
+        
+        Signals that increase DS:
+        - ON zone has more BUY than SELL
+        - BELOW zone is quiet (low volume, low count)
+        - INST buying at ON
+        - Absorption: SELL at ON gets absorbed (followed by BUY)
+        
+        Returns score 0-100 with breakdown.
+        """
+        score = 0
+        max_score = 100
+        reasons: list[str] = []
+        
+        zones = zone_analysis.get("zones", {}) if isinstance(zone_analysis, dict) else {}
+        on_zone = zones.get("ON", {})
+        below_zone = zones.get("BELOW", {})
+        
+        on_buy = float(on_zone.get("buy_volume_sum") or 0)
+        on_sell = float(on_zone.get("sell_volume_sum") or 0)
+        on_delta = float(on_zone.get("delta_sum") or 0)
+        on_inst_buy = float(on_zone.get("inst_buy_volume_sum") or 0)
+        on_inst_sell = float(on_zone.get("inst_sell_volume_sum") or 0)
+        
+        below_buy = float(below_zone.get("buy_volume_sum") or 0)
+        below_sell = float(below_zone.get("sell_volume_sum") or 0)
+        below_delta = float(below_zone.get("delta_sum") or 0)
+        below_total = float(below_zone.get("total_volume_sum") or 0)
+        below_inst_sell = float(below_zone.get("inst_sell_volume_sum") or 0)
+        
+        # 1. ON zone delta positive (+20)
+        if on_delta > 0:
+            score += 20
+            reasons.append("ON delta positive")
+        elif on_delta == 0:
+            score += 10
+            reasons.append("ON delta neutral")
+        
+        # 2. ON zone INST buying > selling (+15)
+        if on_inst_buy > on_inst_sell * 1.2 and on_inst_buy > 1000:
+            score += 15
+            reasons.append("INST buying at support")
+        elif on_inst_sell > on_inst_buy * 1.5 and on_inst_sell > 1000:
+            score -= 10
+            reasons.append("INST selling at support")
+        
+        # 3. BELOW zone quiet (+15) or active selling (-15)
+        total_volume = sum(float(z.get("total_volume_sum") or 0) for z in zones.values())
+        below_pct = (below_total / total_volume * 100) if total_volume > 0 else 0
+        if below_pct < 20:
+            score += 15
+            reasons.append("BELOW quiet ({}%)".format(int(below_pct)))
+        elif below_pct > 40:
+            score -= 10
+            reasons.append("Heavy BELOW activity ({}%)".format(int(below_pct)))
+        
+        # 4. BELOW zone delta positive (+15) - buyers accumulating
+        if below_delta > 0:
+            score += 15
+            reasons.append("Buyers accumulating BELOW")
+        elif below_delta < 0 and abs(below_delta) > below_buy * 0.3:
+            score -= 10
+            reasons.append("Sellers dominating BELOW")
+        
+        # 5. No INST selling BELOW (+10) or heavy INST selling (-15)
+        if below_inst_sell < 1000:
+            score += 10
+            reasons.append("No INST selling BELOW")
+        elif below_inst_sell > 10000:
+            score -= 15
+            reasons.append("Heavy INST selling BELOW")
+        
+        # 6. SOAK confirmed (+15)
+        if zone_analysis.get("soak", {}).get("confirmed"):
+            score += 15
+            reasons.append("SOAK confirmed")
+        
+        # 7. Absorption detection: look for SELL segments followed by BUY segments at ON
+        absorption_count = 0
+        for i, seg in enumerate(segments[:-1]):
+            if seg.get("zone") == "ON" and float(seg.get("delta") or 0) < 0:
+                next_seg = segments[i + 1]
+                if next_seg.get("zone") == "ON" and float(next_seg.get("delta") or 0) > 0:
+                    absorption_count += 1
+        if absorption_count >= 2:
+            score += 10
+            reasons.append("Absorption detected ({} times)".format(absorption_count))
+        
+        # 8. ACCUMULATION PATTERN: INST buying when price dips BELOW
+        # Look for: price enters BELOW → INST buying appears → price recovers to ON
+        below_inst_buy = float(below_zone.get("inst_buy_volume_sum") or 0)
+        accumulation_detected = False
+        accumulation_count = 0
+        
+        # Count sequences: BELOW segment with INST buying followed by ON/ABOVE segment
+        for i, seg in enumerate(segments[:-1]):
+            if seg.get("zone") == "BELOW":
+                seg_inst_buy = float(seg.get("inst_buy") or 0)
+                seg_inst_sell = float(seg.get("inst_sell") or 0)
+                # INST buying the dip
+                if seg_inst_buy > seg_inst_sell and seg_inst_buy > 1000:
+                    next_seg = segments[i + 1]
+                    # And price recovers to ON or ABOVE
+                    if next_seg.get("zone") in {"ON", "ABOVE"}:
+                        accumulation_count += 1
+        
+        # Also check: INST buy volume in BELOW > INST sell volume in BELOW
+        if below_inst_buy > below_inst_sell * 1.3 and below_inst_buy > 3000:
+            accumulation_detected = True
+            score += 15
+            reasons.append("INST accumulating BELOW ({}K bought)".format(int(below_inst_buy / 1000)))
+        
+        if accumulation_count >= 2:
+            accumulation_detected = True
+            score += 10
+            reasons.append("Dip-buying pattern ({} times)".format(accumulation_count))
+        elif accumulation_count == 1:
+            score += 5
+            reasons.append("Single dip-buy detected")
+        
+        # Clamp to 0-100
+        score = max(0, min(100, score))
+        
+        return {
+            "score": score,
+            "max": max_score,
+            "pct": int(score),
+            "reasons": reasons,
+            "grade": "HIGH" if score >= 65 else "MEDIUM" if score >= 40 else "LOW",
+            "accumulation_detected": accumulation_detected,
+            "accumulation_count": accumulation_count,
+        }
+
+    def _compute_aggression_score(
+        self,
+        *,
+        segments: list[dict[str, Any]],
+        zone_analysis: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Aggression Score (AS): Are buyers pressing into ABOVE zone?
+        
+        Signals that increase AS:
+        - ABOVE zone has BUY dominance
+        - INST buying ABOVE
+        - Volume ABOVE is growing (late segments bigger than early)
+        - Price migrating from ON → ABOVE
+        - Seller response ABOVE failing (no price drop back to ON)
+        
+        Returns score 0-100 with breakdown.
+        """
+        score = 0
+        max_score = 100
+        reasons: list[str] = []
+        
+        zones = zone_analysis.get("zones", {}) if isinstance(zone_analysis, dict) else {}
+        above_zone = zones.get("ABOVE", {})
+        
+        above_buy = float(above_zone.get("buy_volume_sum") or 0)
+        above_sell = float(above_zone.get("sell_volume_sum") or 0)
+        above_delta = float(above_zone.get("delta_sum") or 0)
+        above_inst_buy = float(above_zone.get("inst_buy_volume_sum") or 0)
+        above_inst_sell = float(above_zone.get("inst_sell_volume_sum") or 0)
+        above_total = float(above_zone.get("total_volume_sum") or 0)
+        above_time = float(above_zone.get("duration_s") or 0)
+        
+        # Get total session time
+        total_time = sum(float(z.get("duration_s") or 0) for z in zones.values())
+        above_time_pct = (above_time / total_time * 100) if total_time > 0 else 0
+        
+        # 1. ABOVE zone delta positive (+20)
+        if above_delta > 0:
+            score += 20
+            reasons.append("ABOVE delta positive")
+        elif above_delta < 0 and abs(above_delta) > above_buy * 0.3:
+            score -= 15
+            reasons.append("Sellers dominating ABOVE")
+        
+        # 2. INST buying ABOVE (+15)
+        if above_inst_buy > above_inst_sell * 1.2 and above_inst_buy > 1000:
+            score += 15
+            reasons.append("INST buying ABOVE")
+        elif above_inst_sell > above_inst_buy * 1.5 and above_inst_sell > 5000:
+            score -= 15
+            reasons.append("INST selling ABOVE")
+        
+        # 3. Time spent ABOVE (+15 if significant)
+        if above_time_pct >= 30:
+            score += 15
+            reasons.append("Significant time ABOVE ({}%)".format(int(above_time_pct)))
+        elif above_time_pct >= 15:
+            score += 8
+            reasons.append("Some time ABOVE ({}%)".format(int(above_time_pct)))
+        elif above_time_pct < 5:
+            reasons.append("Little time ABOVE ({}%)".format(int(above_time_pct)))
+        
+        # 4. Volume trend in ABOVE: are late segments bigger than early?
+        above_segments = [s for s in segments if s.get("zone") == "ABOVE"]
+        if len(above_segments) >= 4:
+            mid = len(above_segments) // 2
+            early_vol = sum(float(s.get("total_vol") or 0) for s in above_segments[:mid])
+            late_vol = sum(float(s.get("total_vol") or 0) for s in above_segments[mid:])
+            if late_vol > early_vol * 1.3:
+                score += 15
+                reasons.append("Volume ABOVE growing")
+            elif early_vol > late_vol * 1.3:
+                score -= 10
+                reasons.append("Volume ABOVE fading")
+        
+        # 5. Green segments in ABOVE getting bigger (momentum)
+        above_green = [s for s in above_segments if float(s.get("delta") or 0) > 0]
+        if len(above_green) >= 3:
+            vols = [float(s.get("total_vol") or 0) for s in above_green]
+            if len(vols) >= 3:
+                first_half = sum(vols[:len(vols)//2]) / max(1, len(vols)//2)
+                second_half = sum(vols[len(vols)//2:]) / max(1, len(vols) - len(vols)//2)
+                if second_half > first_half * 1.3:
+                    score += 10
+                    reasons.append("Buyer momentum increasing")
+                elif first_half > second_half * 1.3:
+                    score -= 8
+                    reasons.append("Buyer momentum fading")
+        
+        # 6. Position migration: check if segments trend from ON → ABOVE
+        zone_sequence = [s.get("zone") for s in segments[-10:]]  # Last 10 segments
+        above_count_late = sum(1 for z in zone_sequence[-5:] if z == "ABOVE")
+        above_count_early = sum(1 for z in zone_sequence[:5] if z == "ABOVE")
+        if above_count_late > above_count_early:
+            score += 10
+            reasons.append("Migrating into ABOVE")
+        elif above_count_early > above_count_late + 2:
+            score -= 8
+            reasons.append("Retreating from ABOVE")
+        
+        # 7. Seller exhaustion: are red/pink segments ABOVE getting smaller?
+        above_red = [s for s in above_segments if float(s.get("delta") or 0) < 0]
+        if len(above_red) >= 3:
+            vols = [float(s.get("total_vol") or 0) for s in above_red]
+            first_half = sum(vols[:len(vols)//2]) / max(1, len(vols)//2)
+            second_half = sum(vols[len(vols)//2:]) / max(1, len(vols) - len(vols)//2)
+            if first_half > second_half * 1.5:
+                score += 10
+                reasons.append("Sellers exhausting ABOVE")
+        
+        # Clamp to 0-100
+        score = max(0, min(100, score))
+        
+        return {
+            "score": score,
+            "max": max_score,
+            "pct": int(score),
+            "reasons": reasons,
+            "grade": "HIGH" if score >= 65 else "MEDIUM" if score >= 40 else "LOW",
+        }
+
+    def _detect_distribution_pattern(
+        self,
+        *,
+        segments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        Distribution Pattern (DP): Detect "sell-the-rip" sequences.
+        
+        Pattern: INST_SELL ABOVE → SELL ON → SELL BELOW
+        This indicates smart money distribution during rallies.
+        
+        If triggered, should downgrade bullish signals.
+        """
+        triggered = False
+        trigger_count = 0
+        sequences: list[dict[str, Any]] = []
+        
+        # Look for sequences: INST selling ABOVE followed by price dropping
+        for i in range(len(segments) - 2):
+            seg1 = segments[i]
+            seg2 = segments[i + 1]
+            seg3 = segments[i + 2]
+            
+            # Pattern: INST_SELL in ABOVE → negative delta ON → negative delta BELOW
+            inst_sell_above = (
+                seg1.get("zone") == "ABOVE" and 
+                float(seg1.get("inst_sell") or 0) > float(seg1.get("inst_buy") or 0) * 1.5 and
+                float(seg1.get("inst_sell") or 0) > 3000
+            )
+            
+            sell_on = (
+                seg2.get("zone") == "ON" and 
+                float(seg2.get("delta") or 0) < 0
+            )
+            
+            sell_below = (
+                seg3.get("zone") == "BELOW" and 
+                float(seg3.get("delta") or 0) < 0
+            )
+            
+            if inst_sell_above and sell_on:
+                triggered = True
+                trigger_count += 1
+                sequences.append({
+                    "start_ts_ms": seg1.get("start_ts_ms"),
+                    "pattern": "INST_SELL_ABOVE → SELL_ON" + (" → SELL_BELOW" if sell_below else ""),
+                    "inst_sell_vol": float(seg1.get("inst_sell") or 0),
+                })
+            
+            # Also detect: big sell ABOVE → immediate drop to ON/BELOW
+            big_sell_above = (
+                seg1.get("zone") == "ABOVE" and
+                float(seg1.get("delta") or 0) < -5000
+            )
+            drop_to_on_below = seg2.get("zone") in {"ON", "BELOW"}
+            
+            if big_sell_above and drop_to_on_below:
+                triggered = True
+                trigger_count += 1
+                sequences.append({
+                    "start_ts_ms": seg1.get("start_ts_ms"),
+                    "pattern": "BIG_SELL_ABOVE → DROP",
+                    "delta": float(seg1.get("delta") or 0),
+                })
+        
+        severity = "NONE"
+        if trigger_count >= 3:
+            severity = "HIGH"
+        elif trigger_count >= 2:
+            severity = "MEDIUM"
+        elif trigger_count >= 1:
+            severity = "LOW"
+        
+        return {
+            "triggered": triggered,
+            "count": trigger_count,
+            "severity": severity,
+            "sequences": sequences[:5],  # Limit to 5 examples
+        }
+
+    def _compute_late_momentum(
+        self,
+        *,
+        segments: list[dict[str, Any]],
+        n_segments: int = 5,
+    ) -> dict[str, Any]:
+        """
+        Late Momentum: Who's winning in the last N segments?
+        
+        This determines if the session is ENDING bullish or bearish,
+        which is more important for predicting the next move.
+        
+        Bullish signals: INST buying (blue), green dots, ABOVE zone
+        Bearish signals: INST selling (pink), red dots, dropping to BELOW
+        """
+        if not segments or len(segments) < 2:
+            return {
+                "score": 0,
+                "direction": "NEUTRAL",
+                "signals": [],
+                "last_n": 0,
+            }
+        
+        # Get last N segments
+        last_n = segments[-n_segments:] if len(segments) >= n_segments else segments
+        
+        score = 0
+        signals: list[str] = []
+        
+        for seg in last_n:
+            zone = seg.get("zone", "ON")
+            delta = float(seg.get("delta") or 0)
+            inst_buy = float(seg.get("inst_buy") or 0)
+            inst_sell = float(seg.get("inst_sell") or 0)
+            total_vol = float(seg.get("total_vol") or 0)
+            
+            # INST buying
+            if inst_buy > inst_sell * 1.3 and inst_buy > 1000:
+                score += 2
+                if "INST buying" not in signals:
+                    signals.append("INST buying")
+            # INST selling
+            elif inst_sell > inst_buy * 1.3 and inst_sell > 1000:
+                score -= 2
+                if "INST selling" not in signals:
+                    signals.append("INST selling")
+            
+            # Delta direction
+            if delta > 0 and total_vol > 0 and (delta / total_vol) > 0.1:
+                score += 1
+                if "Buyers winning" not in signals:
+                    signals.append("Buyers winning")
+            elif delta < 0 and total_vol > 0 and (abs(delta) / total_vol) > 0.1:
+                score -= 1
+                if "Sellers winning" not in signals:
+                    signals.append("Sellers winning")
+            
+            # Zone position
+            if zone == "ABOVE":
+                score += 1
+            elif zone == "BELOW":
+                score -= 1
+        
+        # Check for strong conviction (big volume in last segments)
+        if last_n:
+            last_seg = last_n[-1]
+            last_delta = float(last_seg.get("delta") or 0)
+            last_vol = float(last_seg.get("total_vol") or 0)
+            all_vols = [float(s.get("total_vol") or 0) for s in segments]
+            avg_vol = sum(all_vols) / len(all_vols) if all_vols else 0
+            
+            # Last segment is high volume buyer
+            if last_vol > avg_vol * 1.5 and last_delta > 0:
+                score += 2
+                signals.append("Strong buyer finish")
+            # Last segment is high volume seller
+            elif last_vol > avg_vol * 1.5 and last_delta < 0:
+                score -= 2
+                signals.append("Strong seller finish")
+        
+        # Determine direction
+        if score >= 3:
+            direction = "BULLISH"
+        elif score <= -3:
+            direction = "BEARISH"
+        elif score > 0:
+            direction = "LEAN_BULLISH"
+        elif score < 0:
+            direction = "LEAN_BEARISH"
+        else:
+            direction = "NEUTRAL"
+        
+        return {
+            "score": score,
+            "direction": direction,
+            "signals": signals,
+            "last_n": len(last_n),
+        }
+
+    def _compute_market_state(
+        self,
+        *,
+        defense_score: dict[str, Any],
+        aggression_score: dict[str, Any],
+        distribution_pattern: dict[str, Any],
+        zone_analysis: dict[str, Any],
+        segments: list[dict[str, Any]],
+        late_momentum: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Market State Machine:
+        
+        States:
+        - BREAKDOWN_RISK: DS low, BELOW expanding
+        - DEFENSE_ONLY: DS high, AS low (support holding but capped)
+        - RECLAIM_DEVELOPING: DS rising + early AS signals
+        - ACCEPTANCE: DS high + AS medium, time ABOVE increasing
+        - BREAK_LIKELY: DS high + AS high, resistance failing
+        
+        Each state maps to an action: WAIT, SCALP, STARTER, ADD, AVOID
+        
+        Late momentum can upgrade/downgrade the final action.
+        """
+        ds = int(defense_score.get("pct") or 0)
+        as_ = int(aggression_score.get("pct") or 0)
+        dp_triggered = distribution_pattern.get("triggered", False)
+        dp_severity = distribution_pattern.get("severity", "NONE")
+        
+        # Accumulation pattern detection
+        accumulation = defense_score.get("accumulation_detected", False)
+        accumulation_count = defense_score.get("accumulation_count", 0)
+        
+        # Late momentum
+        late_score = int(late_momentum.get("score") or 0)
+        late_direction = late_momentum.get("direction", "NEUTRAL")
+        late_signals = late_momentum.get("signals", [])
+        
+        zones = zone_analysis.get("zones", {}) if isinstance(zone_analysis, dict) else {}
+        below_zone = zones.get("BELOW", {})
+        below_delta = float(below_zone.get("delta_sum") or 0)
+        
+        state = "UNKNOWN"
+        action = "WAIT"
+        reason = ""
+        confidence = 0
+        
+        # PRIORITY CHECK: Accumulation pattern overrides low DS
+        # If INST is buying dips, that's a setup even if overall DS is low
+        if accumulation and accumulation_count >= 2:
+            state = "ACCUMULATION_SETUP"
+            action = "WATCH"
+            reason = "INST accumulating on dips ({} times) despite mixed signals (DS={}, AS={})".format(
+                accumulation_count, ds, as_
+            )
+            confidence = 60
+        elif accumulation:
+            state = "DEFENSE_ACCUMULATING"
+            action = "WATCH"
+            reason = "INST buying dips detected, watch for follow-through (DS={}, AS={})".format(ds, as_)
+            confidence = 55
+        
+        # State determination logic (only if not accumulation)
+        elif ds < 40:
+            if below_delta < -5000:
+                state = "BREAKDOWN_RISK"
+                action = "AVOID"
+                reason = "Defense weak (DS={}), selling BELOW".format(ds)
+                confidence = 80
+            else:
+                state = "WEAK_DEFENSE"
+                action = "WAIT"
+                reason = "Defense not established (DS={})".format(ds)
+                confidence = 60
+        
+        elif ds >= 65 and as_ < 35:
+            # Accumulation already handled at the top - this is pure defense
+            state = "DEFENSE_ONLY"
+            action = "WAIT"
+            reason = "Support defended (DS={}) but buyers not pressing (AS={})".format(ds, as_)
+            confidence = 70
+        
+        elif ds >= 50 and 35 <= as_ < 60:
+            if dp_triggered and dp_severity in {"MEDIUM", "HIGH"}:
+                state = "DISTRIBUTION"
+                action = "WAIT"
+                reason = "Distribution pattern detected, AS={} may be fake".format(as_)
+                confidence = 65
+            else:
+                state = "RECLAIM_DEVELOPING"
+                action = "STARTER"
+                reason = "Defense solid (DS={}), aggression building (AS={})".format(ds, as_)
+                confidence = 55
+        
+        elif ds >= 60 and 60 <= as_ < 75:
+            if dp_triggered and dp_severity == "HIGH":
+                state = "ACCEPTANCE_CAUTIOUS"
+                action = "STARTER"
+                reason = "AS={} but distribution present - reduced size".format(as_)
+                confidence = 50
+            else:
+                state = "ACCEPTANCE"
+                action = "STARTER"
+                reason = "Solid defense (DS={}), good aggression (AS={})".format(ds, as_)
+                confidence = 65
+        
+        elif ds >= 60 and as_ >= 75:
+            if dp_triggered and dp_severity == "HIGH":
+                state = "BREAK_LIKELY_CAUTIOUS"
+                action = "ADD"
+                reason = "Strong AS={} but watch for distribution".format(as_)
+                confidence = 60
+            else:
+                state = "BREAK_LIKELY"
+                action = "ADD"
+                reason = "Defense locked (DS={}), buyers pressing hard (AS={})".format(ds, as_)
+                confidence = 75
+        
+        else:
+            state = "MIXED"
+            action = "WAIT"
+            reason = "Unclear setup: DS={}, AS={}".format(ds, as_)
+            confidence = 40
+        
+        # Override for high distribution severity
+        if dp_severity == "HIGH" and action in {"STARTER", "ADD"}:
+            action = "WAIT"
+            reason += " [OVERRIDE: Heavy distribution]"
+            confidence = max(30, confidence - 20)
+        
+        # LATE MOMENTUM UPGRADE/DOWNGRADE
+        # If action is WATCH and late momentum is bullish → upgrade to STARTER
+        # If late momentum is bearish → downgrade confidence
+        late_upgrade = False
+        late_downgrade = False
+        
+        if late_direction in {"BULLISH", "LEAN_BULLISH"} and late_score >= 3:
+            if action == "WATCH":
+                action = "STARTER"
+                late_upgrade = True
+                reason += " [LATE MOMENTUM: {} → upgraded]".format(", ".join(late_signals[:2]))
+                confidence = min(80, confidence + 10)
+            elif action == "WAIT" and state not in {"BREAKDOWN_RISK"}:
+                action = "WATCH"
+                late_upgrade = True
+                reason += " [LATE MOMENTUM: {}]".format(", ".join(late_signals[:2]))
+                confidence = min(70, confidence + 5)
+        
+        elif late_direction in {"BEARISH", "LEAN_BEARISH"} and late_score <= -3:
+            if action in {"STARTER", "ADD"}:
+                action = "WATCH"
+                late_downgrade = True
+                reason += " [LATE MOMENTUM BEARISH: {} → downgraded]".format(", ".join(late_signals[:2]))
+                confidence = max(30, confidence - 15)
+            elif action == "WATCH":
+                action = "WAIT"
+                late_downgrade = True
+                reason += " [LATE MOMENTUM BEARISH: {}]".format(", ".join(late_signals[:2]))
+                confidence = max(30, confidence - 10)
+        
+        return {
+            "state": state,
+            "action": action,
+            "reason": reason,
+            "confidence": confidence,
+            "ds": ds,
+            "as": as_,
+            "dp_triggered": dp_triggered,
+            "dp_severity": dp_severity,
+            "late_momentum": {
+                "score": late_score,
+                "direction": late_direction,
+                "signals": late_signals,
+                "upgrade": late_upgrade,
+                "downgrade": late_downgrade,
+            },
+        }
 
     def _summarize_level_band_window(
         self,
@@ -2305,6 +4381,8 @@ class Store:
         markers = self.read_markers(date=date, ticker=ticker, session_id=session_id)
         stream = self.read_session_stream(date=date, ticker=ticker, session_id=session_id)
         interval_s = self._infer_interval_s(stream)
+        # Zone segments use 30-second intervals for less noisy dots
+        zone_segment_interval_s = 30
 
         watch_windows: list[dict[str, Any]] = []
         event_markers: list[dict[str, Any]] = []
@@ -2729,6 +4807,90 @@ class Store:
                     )
                     session_wide["flags"] = self._flags_from_summary(session_wide)
 
+                    # Zone story (watch window) + last minutes bias
+                    zone_analysis = self._compute_zone_metrics(
+                        df=stream,
+                        level_price=float(lp),
+                        start_ms=ws,
+                        end_ms=we,
+                        interval_s=interval_s,
+                        above_pct=self._DEFAULT_ZONE_ABOVE_PCT,
+                        below_pct=self._DEFAULT_ZONE_BELOW_PCT,
+                        on_pct=self._DEFAULT_ZONE_ON_PCT,
+                        on_pct_down=self._DEFAULT_ZONE_ON_PCT_DOWN,
+                    )
+                    zone_analysis["last_minutes"] = {
+                        "last_3m": self._compute_last_minutes_bias(
+                            df=stream, end_ms=we, minutes=3
+                        ),
+                        "last_5m": self._compute_last_minutes_bias(
+                            df=stream, end_ms=we, minutes=5
+                        ),
+                    }
+                    zone_segments = self._compute_zone_segments(
+                        df=stream,
+                        level_price=float(lp),
+                        start_ms=ws,
+                        end_ms=we,
+                        interval_s=zone_segment_interval_s,  # 30s segments for less noisy dots
+                        above_pct=self._DEFAULT_ZONE_ABOVE_PCT,
+                        below_pct=self._DEFAULT_ZONE_BELOW_PCT,
+                        on_pct=self._DEFAULT_ZONE_ON_PCT,
+                        on_pct_down=self._DEFAULT_ZONE_ON_PCT_DOWN,
+                    )
+                    zone_segments = self._annotate_zone_segments(
+                        segments=zone_segments, zone_analysis=zone_analysis
+                    )
+                    zone_signals = self._compute_additional_signals(
+                        segments=zone_segments, zone_analysis=zone_analysis
+                    )
+                    risk_reward = self._compute_risk_reward(
+                        level_price=float(lp),
+                        zone_analysis=zone_analysis,
+                        segments=zone_segments,
+                    )
+                    zone_verdict = self._compute_final_verdict(
+                        zone_analysis=zone_analysis,
+                        additional=zone_signals,
+                        segments=zone_segments,
+                        risk_reward=risk_reward,
+                    )
+                    trade_trigger = self._compute_trade_trigger(
+                        level_price=float(lp),
+                        risk_reward=risk_reward,
+                        zone_analysis=zone_analysis,
+                    )
+                    role_behavior = self._compute_role_behavior(
+                        zone_analysis=zone_analysis,
+                        segments=zone_segments,
+                        level_kind=lk,
+                    )
+
+                    # DS/AS/DP State Machine scoring
+                    defense_score = self._compute_defense_score(
+                        segments=zone_segments,
+                        zone_analysis=zone_analysis,
+                    )
+                    aggression_score = self._compute_aggression_score(
+                        segments=zone_segments,
+                        zone_analysis=zone_analysis,
+                    )
+                    distribution_pattern = self._detect_distribution_pattern(
+                        segments=zone_segments,
+                    )
+                    late_momentum = self._compute_late_momentum(
+                        segments=zone_segments,
+                        n_segments=5,
+                    )
+                    market_state = self._compute_market_state(
+                        defense_score=defense_score,
+                        aggression_score=aggression_score,
+                        distribution_pattern=distribution_pattern,
+                        zone_analysis=zone_analysis,
+                        segments=zone_segments,
+                        late_momentum=late_momentum,
+                    )
+
                     # Interaction timeline: every touch/break/reclaim/reject across entire session
                     interaction_timeline = self._compute_interaction_timeline(
                         df=stream,
@@ -2787,12 +4949,25 @@ class Store:
                         "checklist": checklist,
                         "move_from_prev": move_from_prev,
                         "session_wide": session_wide,
+                        "zone_analysis": zone_analysis,
+                        "zone_segments": zone_segments,
+                        "zone_signals": zone_signals,
+                        "risk_reward": risk_reward,
+                        "zone_verdict": zone_verdict,
+                        "trade_trigger": trade_trigger,
+                        "role_behavior": role_behavior,
                         "interaction_timeline": interaction_timeline,
                         "timeline_summary": timeline_summary,
                         "role_flip": role_flip,
                         "level_type": level_type_n,
                         "direction_bias": n.get("direction_bias", "long"),
                         "indicator_col": ind_col_name,  # NEW: for dynamic levels
+                        # DS/AS/DP State Machine
+                        "defense_score": defense_score,
+                        "aggression_score": aggression_score,
+                        "distribution_pattern": distribution_pattern,
+                        "market_state": market_state,
+                        "late_momentum": late_momentum,
                     }
                     # Add indicator info if applicable
                     if level_type_n == "indicator" and indicator_name:
@@ -3513,4 +5688,91 @@ class Store:
             }
         }
 
+    # ============ LIVE ANALYSIS ============
 
+    def compute_live_analysis(
+        self,
+        *,
+        session_df: pd.DataFrame,
+        level_price: float,
+        level_kind: str,
+        ticker: str,
+    ) -> dict[str, Any]:
+        """
+        Compute analysis for live dashboard from a session stream DataFrame.
+        Returns a level_data dict compatible with the live.html template.
+        """
+        if session_df.empty:
+            return {}
+
+        # Use the full time range of the session data
+        ts_col = "timestamp" if "timestamp" in session_df.columns else "ts_ms"
+        start_ms = int(session_df[ts_col].min())
+        end_ms = int(session_df[ts_col].max())
+
+        # Compute zone analysis
+        zone_analysis = self._compute_zone_metrics(
+            df=session_df,
+            level_price=level_price,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            above_pct=self._DEFAULT_ZONE_ABOVE_PCT,
+            below_pct=self._DEFAULT_ZONE_BELOW_PCT,
+            on_pct=self._DEFAULT_ZONE_ON_PCT,
+            on_pct_down=self._DEFAULT_ZONE_ON_PCT_DOWN,
+            interval_s=self._DEFAULT_SNAPSHOT_INTERVAL_S,
+        )
+
+        # Compute zone segments
+        zone_segments = self._compute_zone_segments(
+            df=session_df,
+            level_price=level_price,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            above_pct=self._DEFAULT_ZONE_ABOVE_PCT,
+            below_pct=self._DEFAULT_ZONE_BELOW_PCT,
+            on_pct=self._DEFAULT_ZONE_ON_PCT,
+            on_pct_down=self._DEFAULT_ZONE_ON_PCT_DOWN,
+            interval_s=self._DEFAULT_SNAPSHOT_INTERVAL_S,
+        )
+        zone_segments = self._annotate_zone_segments(
+            segments=zone_segments, zone_analysis=zone_analysis
+        )
+
+        # Defense/Aggression scoring
+        defense_score = self._compute_defense_score(
+            segments=zone_segments,
+            zone_analysis=zone_analysis,
+        )
+        aggression_score = self._compute_aggression_score(
+            segments=zone_segments,
+            zone_analysis=zone_analysis,
+        )
+        distribution_pattern = self._detect_distribution_pattern(
+            segments=zone_segments,
+        )
+        late_momentum = self._compute_late_momentum(
+            segments=zone_segments,
+            n_segments=5,
+        )
+        market_state = self._compute_market_state(
+            defense_score=defense_score,
+            aggression_score=aggression_score,
+            distribution_pattern=distribution_pattern,
+            zone_analysis=zone_analysis,
+            segments=zone_segments,
+            late_momentum=late_momentum,
+        )
+
+        return {
+            "level_price": level_price,
+            "level_kind": level_kind,
+            "ticker": ticker,
+            "zone_analysis": zone_analysis,
+            "zone_segments": zone_segments,
+            "defense_score": defense_score,
+            "aggression_score": aggression_score,
+            "distribution_pattern": distribution_pattern,
+            "late_momentum": late_momentum,
+            "market_state": market_state,
+        }

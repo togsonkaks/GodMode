@@ -136,6 +136,20 @@ def web_cmd(config_path: Path, host: str, port: int) -> None:
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
+@main.command("scanner-cron")
+@click.option("--state-path", type=click.Path(dir_okay=False, path_type=Path), default=Path("data/scanner/scanner_state.json"))
+@click.option("--top-n", type=int, default=12)
+def scanner_cron_cmd(state_path: Path, top_n: int) -> None:
+    """Run the downtrend-break scanner once (for cron/Render jobs)."""
+    from godmode.scan.downtrend_break_scanner import ScannerConfig
+    from godmode.scan.scanner_cron import run_scanner_once
+
+    cfg = ScannerConfig(top_n=int(top_n), refresh_seconds=5)
+
+    out = asyncio.run(run_scanner_once(state_path=state_path, cfg=cfg))
+    click.echo(out)
+
+
 if __name__ == "__main__":
     main()
 

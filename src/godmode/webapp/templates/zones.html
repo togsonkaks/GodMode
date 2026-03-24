@@ -1,0 +1,1562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GodMode — Zones</title>
+  <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-hover: #79b8ff;
+      --success: #3fb950;
+      --error: #f85149;
+      --warning: #d29922;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 1.25rem;
+      color: var(--accent);
+      font-weight: 500;
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 1.25rem;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+    }
+    .back-link:hover { color: var(--accent); }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 1rem;
+      align-items: start;
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+    }
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    input, select, button {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.95rem;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+    }
+    .row { display: flex; gap: 0.75rem; }
+    .row > * { flex: 1; }
+    .hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.35rem;
+      line-height: 1.35;
+    }
+    .tf-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+    .tf-btn {
+      width: auto;
+      padding: 0.5rem 0.75rem;
+      cursor: pointer;
+      background: transparent;
+    }
+    .tf-btn.active {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-secondary {
+      background: transparent;
+      cursor: pointer;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.04); }
+    .btn-warn { border-color: rgba(210,153,34,0.6); color: var(--warning); }
+    .btn-warn:hover { background: rgba(210,153,34,0.08); }
+    .status {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+    }
+    .kv {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.05);
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+    }
+    .kv .k { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .kv .v { margin-top: 0.25rem; font-size: 0.95rem; }
+    #chart-container {
+      height: 420px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .chart-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 0.75rem; }
+    .summary {
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      line-height: 1.4;
+      font-size: 0.92rem;
+      white-space: pre-wrap;
+    }
+    .tape-wrap {
+      margin-top: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.02);
+    }
+    .tape-toolbar {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .tape-toolbar select, .tape-toolbar button {
+      width: auto;
+      padding: 0.4rem 0.6rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+    }
+    .tape-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    .tape-scroll {
+      max-height: 340px;
+      overflow: auto;
+    }
+    .tape-table th, .tape-table td {
+      padding: 0.35rem 0.5rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      white-space: nowrap;
+      text-align: right;
+    }
+    .tape-table th {
+      position: sticky;
+      top: 0;
+      background: #10161f;
+      z-index: 1;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.72rem;
+    }
+    .tape-table td:first-child, .tape-table th:first-child { text-align: left; }
+    .row-buy { background: rgba(34,197,94,0.06); }
+    .row-sell { background: rgba(239,68,68,0.06); }
+    .row-conflict { outline: 1px solid rgba(34,197,94,0.35); outline-offset: -1px; }
+    .row-soak { outline: 1px dashed rgba(34,197,94,0.55); outline-offset: -1px; }
+    .pill {
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.15);
+      color: var(--text-muted);
+      font-size: 0.72rem;
+    }
+    .err { color: var(--error); }
+    .ok { color: var(--success); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a class="back-link" href="/live">← Back to Live</a>
+    <h1>Zones — click start/end candles, analyze</h1>
+
+    <div class="grid">
+      <div class="panel">
+        <div class="row">
+          <div>
+            <label>Ticker</label>
+            <input id="ticker" placeholder="LCFY" value="LCFY" />
+            <div class="hint">Uses the same Alpaca trades+quotes pipeline as the LIVE dots (`/api/live/fast`).</div>
+          </div>
+          <div>
+            <label>Timezone</label>
+            <select id="timezone">
+              <option value="America/New_York">America/New_York</option>
+              <option value="America/Chicago" selected>America/Chicago</option>
+              <option value="America/Los_Angeles">America/Los_Angeles</option>
+              <option value="UTC">UTC</option>
+            </select>
+            <div class="tf-row">
+              <button class="tf-btn active" data-tf="1m">1m</button>
+              <button class="tf-btn" data-tf="30s">30s</button>
+              <button class="tf-btn" data-tf="2m">2m</button>
+              <button class="tf-btn" data-tf="3m">3m</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 0.75rem;">
+          <div id="chart-container"></div>
+          <div class="hint">
+            - Right-click sets the level price (yellow dashed line).<br />
+            - Left-click sets Zone Start, then left-click again sets Zone End (markers A/B).<br />
+            - Analyze uses the selected level + time window.
+          </div>
+        </div>
+
+        <div class="chart-tools">
+          <button id="btn-load" class="btn-secondary">Load Chart</button>
+          <button id="btn-clear" class="btn-secondary btn-warn">Clear Selection</button>
+          <button id="btn-analyze" class="btn-primary" disabled>Analyze Zone</button>
+          <button id="btn-save" class="btn-secondary" disabled>Save Zone</button>
+        </div>
+
+        <div class="status">
+          <div class="kv"><div class="k">Level</div><div class="v" id="st-level">—</div></div>
+          <div class="kv"><div class="k">Timeframe</div><div class="v" id="st-tf">1m</div></div>
+          <div class="kv"><div class="k">Start</div><div class="v" id="st-start">—</div></div>
+          <div class="kv"><div class="k">End</div><div class="v" id="st-end">—</div></div>
+          <div class="kv"><div class="k">Start Close / Vol</div><div class="v" id="st-start-cv">—</div></div>
+          <div class="kv"><div class="k">End Close / Vol</div><div class="v" id="st-end-cv">—</div></div>
+          <div class="kv"><div class="k">Zone Volume</div><div class="v" id="st-zone-vol">—</div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <label>Zone Summary</label>
+        <div class="hint">Simple read: price change + EMA 9/20/30 + buyers vs sellers + conflict/absorption.</div>
+        <div id="summary" class="summary">Select a zone and click Analyze.</div>
+
+        <div style="margin-top: 1rem;">
+          <label>Saved Zones</label>
+          <div class="hint">Saved in your browser (localStorage) for now.</div>
+          <div id="saved" class="summary" style="max-height: 260px; overflow:auto;">(none)</div>
+        </div>
+
+        <div style="margin-top: 1rem;">
+          <label>Tape (Segments)</label>
+          <div class="hint">Per-30s segments from the same pipeline as LIVE dots (`/api/live/fast`).</div>
+          <div class="tape-wrap">
+            <div class="tape-toolbar">
+              <span class="pill" id="tape-meta">—</span>
+              <select id="tape-filter">
+                <option value="ALL" selected>All zones</option>
+                <option value="ABOVE">ABOVE</option>
+                <option value="ON">ON (segment label)</option>
+                <option value="ON_BAND">ON band only (skip empty)</option>
+                <option value="BELOW">BELOW</option>
+                <option value="OUT">OUT</option>
+              </select>
+              <button id="tape-copy" class="btn-secondary" style="margin-left:auto;">Copy CSV</button>
+              <button id="tape-summary" class="btn-secondary">Copy Summary</button>
+            </div>
+            <div class="tape-scroll">
+              <table class="tape-table" id="tape-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Zone</th>
+                    <th>Px</th>
+                    <th>Vol</th>
+                    <th>Buy%</th>
+                    <th>Δ</th>
+                    <th>Buy</th>
+                    <th>Sell</th>
+                    <th>INST B/S</th>
+                    <th>INST Δ</th>
+                    <th>TC</th>
+                    <th>AvgSz</th>
+                    <th>Tags</th>
+                  </tr>
+                </thead>
+                <tbody id="tape-body">
+                  <tr><td colspan="13" style="text-align:left; padding:0.75rem; color: var(--text-muted);">Analyze a zone to populate.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ======= State =======
+    let chart = null;
+    let candleSeries = null;
+    let chartData = [];
+    let currentTimeframe = '1m';
+    let lastClickTimeSec = null;
+    let lastClickPrice = null;
+    let lastRightClickPrice = null;
+    let priceLine = null;
+    let zoneStartTimeSec = null;
+    let zoneEndTimeSec = null;
+    let lastSegments = [];
+    let lastSegmentsMeta = { ticker: null, level: null, startMs: null, endMs: null };
+    let lastCompactSummary = '';
+
+    const tfSeconds = { '30s': 30, '1m': 60, '2m': 120, '3m': 180 };
+
+    function fmtTime(sec) {
+      if (!sec) return '—';
+      const tz = document.getElementById('timezone').value;
+      const d = new Date(sec * 1000);
+      return d.toLocaleString('en-US', { timeZone: tz, hour12: false });
+    }
+
+    function setStatus() {
+      document.getElementById('st-level').textContent = lastRightClickPrice ? `$${Number(lastRightClickPrice).toFixed(4)}` : '—';
+      document.getElementById('st-tf').textContent = currentTimeframe;
+      document.getElementById('st-start').textContent = fmtTime(zoneStartTimeSec);
+      document.getElementById('st-end').textContent = fmtTime(zoneEndTimeSec);
+
+      let startCv = '—';
+      let endCv = '—';
+      let zoneVolText = '—';
+      if (chartData.length && zoneStartTimeSec) {
+        const i = Math.max(0, findIndexByTime(zoneStartTimeSec));
+        const c = chartData[i];
+        const close = c && c.close != null ? Number(c.close).toFixed(4) : null;
+        const vol = c && c.volume != null ? Number(c.volume).toLocaleString() : null;
+        if (close != null) startCv = `$${close}` + (vol != null ? ` / ${vol}` : '');
+      }
+      if (chartData.length && zoneEndTimeSec) {
+        const i = Math.max(0, findIndexByTime(zoneEndTimeSec));
+        const c = chartData[i];
+        const close = c && c.close != null ? Number(c.close).toFixed(4) : null;
+        const vol = c && c.volume != null ? Number(c.volume).toLocaleString() : null;
+        if (close != null) endCv = `$${close}` + (vol != null ? ` / ${vol}` : '');
+      }
+      document.getElementById('st-start-cv').textContent = startCv;
+      document.getElementById('st-end-cv').textContent = endCv;
+
+      if (chartData.length && zoneStartTimeSec && zoneEndTimeSec) {
+        const iStart = Math.max(0, findIndexByTime(zoneStartTimeSec));
+        const iEnd = Math.max(0, findIndexByTime(zoneEndTimeSec));
+        const lo = Math.min(iStart, iEnd);
+        const hi = Math.max(iStart, iEnd);
+        let sum = 0;
+        for (let i = lo; i <= hi; i++) {
+          const v = chartData[i]?.volume;
+          if (v != null && !Number.isNaN(Number(v))) sum += Number(v);
+        }
+        if (sum > 0) zoneVolText = sum.toLocaleString();
+      }
+      document.getElementById('st-zone-vol').textContent = zoneVolText;
+
+      const canAnalyze = !!(chart && candleSeries && lastRightClickPrice && zoneStartTimeSec && zoneEndTimeSec && zoneEndTimeSec > zoneStartTimeSec);
+      document.getElementById('btn-analyze').disabled = !canAnalyze;
+      document.getElementById('btn-save').disabled = !canAnalyze;
+    }
+
+    // ======= EMA helpers (on candle closes) =======
+    function ema(values, length) {
+      const out = new Array(values.length).fill(null);
+      if (!values.length) return out;
+      const k = 2 / (length + 1);
+      let prev = values[0];
+      out[0] = prev;
+      for (let i = 1; i < values.length; i++) {
+        const v = values[i];
+        prev = v * k + prev * (1 - k);
+        out[i] = prev;
+      }
+      return out;
+    }
+
+    function findIndexByTime(sec) {
+      // chartData is sorted by time asc
+      // Times are candle END times from /api/chart_candles
+      let lo = 0, hi = chartData.length - 1, best = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const t = chartData[mid].time;
+        if (t === sec) return mid;
+        if (t < sec) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+      }
+      return best;
+    }
+
+    // ======= Load chart candles =======
+    async function loadChart() {
+      const ticker = document.getElementById('ticker').value.trim().toUpperCase();
+      const tz = document.getElementById('timezone').value;
+      const container = document.getElementById('chart-container');
+      container.innerHTML = '';
+
+      zoneStartTimeSec = null;
+      zoneEndTimeSec = null;
+      setStatus();
+
+      const resp = await fetch(`/api/chart_candles?ticker=${encodeURIComponent(ticker)}&timeframe=${encodeURIComponent(currentTimeframe)}&timezone=${encodeURIComponent(tz)}`);
+      const data = await resp.json();
+      if (data.error) {
+        container.innerHTML = `<div class="summary err">${data.error}</div>`;
+        return;
+      }
+
+      chartData = data.candles || [];
+      if (!chartData.length) {
+        container.innerHTML = `<div class="summary">No candle data.</div>`;
+        return;
+      }
+
+      const selectedTz = document.getElementById('timezone').value;
+      chart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 420,
+        layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
+        grid: { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: { timeVisible: true, secondsVisible: currentTimeframe === '30s', borderColor: '#30363d' },
+        rightPriceScale: { borderColor: '#30363d' },
+        localization: {
+          timeFormatter: (timestamp) => {
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleTimeString('en-US', { timeZone: selectedTz, hour: '2-digit', minute: '2-digit', second: currentTimeframe === '30s' ? '2-digit' : undefined, hour12: false });
+          },
+        },
+      });
+
+      candleSeries = chart.addCandlestickSeries({
+        upColor: '#3fb950',
+        downColor: '#f85149',
+        borderUpColor: '#3fb950',
+        borderDownColor: '#f85149',
+        wickUpColor: '#3fb950',
+        wickDownColor: '#f85149',
+      });
+      candleSeries.setData(chartData);
+      chart.timeScale().fitContent();
+
+      chart.subscribeClick((param) => {
+        if (!param || !param.time || !param.point) return;
+        const price = candleSeries.coordinateToPrice(param.point.y);
+        if (price === null) return;
+        lastClickTimeSec = param.time;
+        lastClickPrice = Number(price);
+
+        if (!zoneStartTimeSec) {
+          zoneStartTimeSec = lastClickTimeSec;
+          zoneEndTimeSec = null;
+        } else if (!zoneEndTimeSec) {
+          zoneEndTimeSec = lastClickTimeSec;
+          if (zoneEndTimeSec < zoneStartTimeSec) {
+            const tmp = zoneStartTimeSec;
+            zoneStartTimeSec = zoneEndTimeSec;
+            zoneEndTimeSec = tmp;
+          }
+        } else {
+          // start a new selection
+          zoneStartTimeSec = lastClickTimeSec;
+          zoneEndTimeSec = null;
+        }
+
+        applyMarkers();
+        setStatus();
+      });
+
+      container.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (!chart || !candleSeries) return;
+        const price = paramFromCoord(e);
+        if (price == null) return;
+        lastRightClickPrice = price;
+        if (priceLine) candleSeries.removePriceLine(priceLine);
+        priceLine = candleSeries.createPriceLine({
+          price: parseFloat(lastRightClickPrice),
+          color: '#d29922',
+          lineWidth: 2,
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: 'Level',
+        });
+        setStatus();
+      });
+
+      function paramFromCoord(e) {
+        if (!chart) return null;
+        const rect = container.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const price = candleSeries.coordinateToPrice(y);
+        if (price == null || Number.isNaN(price)) return null;
+        return Number(price).toFixed(4);
+      }
+
+      window.addEventListener('resize', () => {
+        if (chart) chart.applyOptions({ width: container.clientWidth });
+      });
+
+      setStatus();
+    }
+
+    function applyMarkers() {
+      if (!candleSeries) return;
+      const markers = [];
+      if (zoneStartTimeSec) markers.push({ time: zoneStartTimeSec, position: 'belowBar', color: '#fbbf24', shape: 'arrowUp', text: 'A' });
+      if (zoneEndTimeSec) markers.push({ time: zoneEndTimeSec, position: 'belowBar', color: '#60a5fa', shape: 'arrowUp', text: 'B' });
+      candleSeries.setMarkers(markers);
+    }
+
+    function clearSelection() {
+      zoneStartTimeSec = null;
+      zoneEndTimeSec = null;
+      applyMarkers();
+      setStatus();
+      document.getElementById('summary').textContent = 'Select a zone and click Analyze.';
+    }
+
+    // ======= Analyze zone (calls /api/live/fast) =======
+    async function analyzeZone() {
+      const ticker = document.getElementById('ticker').value.trim().toUpperCase();
+      const level = Number(lastRightClickPrice);
+      if (!ticker || !level || !zoneStartTimeSec || !zoneEndTimeSec) return;
+
+      const startSec = zoneStartTimeSec - (tfSeconds[currentTimeframe] || 60); // chart uses candle END time
+      const endSec = zoneEndTimeSec;
+      const startMs = Math.round(startSec * 1000);
+      const endMs = Math.round(endSec * 1000);
+
+      const summaryEl = document.getElementById('summary');
+      summaryEl.textContent = 'Analyzing…';
+
+      // Compute EMA snapshot on candle closes
+      const closes = chartData.map(c => Number(c.close));
+      const e9 = ema(closes, 9);
+      const e20 = ema(closes, 20);
+      const e30 = ema(closes, 30);
+      const iStart = Math.max(0, findIndexByTime(zoneStartTimeSec));
+      const iEnd = Math.max(0, findIndexByTime(zoneEndTimeSec));
+      const startCandle = chartData[iStart];
+      const endCandle = chartData[iEnd];
+      const startClose = closes[iStart];
+      const endClose = closes[iEnd];
+      const pctCloseToClose = startClose ? ((endClose - startClose) / startClose) * 100 : 0;
+
+      // Zone range (high/low across the whole selection, inclusive)
+      let zoneHigh = -Infinity;
+      let zoneLow = Infinity;
+      let zoneBarVol = 0;
+      let wickTouches = 0;
+      let bandTouches = 0;
+      let closeOn = 0;
+      let closeAbove = 0;
+      let closeBelow = 0;
+      let closeOut = 0;
+      // Must match compute_fast_zones_with_quotes defaults:
+      // ON band is asymmetric: +1.5% above level, -2.0% below level.
+      const onPctAbove = 1.5;
+      const onPctBelow = 2.0;
+      const abovePct = 5.0;
+      const belowPct = 5.0;
+      const onUpper = level * (1 + onPctAbove / 100);
+      const onLower = level * (1 - onPctBelow / 100);
+      const aboveFloor = level * (1 + onPctAbove / 100);
+      const aboveCeil = level * (1 + abovePct / 100);
+      const belowCeil = level * (1 - onPctBelow / 100);
+      const belowFloor = level * (1 - belowPct / 100);
+      const lo = Math.min(iStart, iEnd);
+      const hi = Math.max(iStart, iEnd);
+      for (let i = lo; i <= hi; i++) {
+        const c = chartData[i];
+        if (!c) continue;
+        const h = Number(c.high);
+        const l = Number(c.low);
+        if (!Number.isNaN(h)) zoneHigh = Math.max(zoneHigh, h);
+        if (!Number.isNaN(l)) zoneLow = Math.min(zoneLow, l);
+        const v = c.volume;
+        if (v != null && !Number.isNaN(Number(v))) zoneBarVol += Number(v);
+
+        // Touch counts vs the selected level
+        if (!Number.isNaN(l) && !Number.isNaN(h)) {
+          if (l <= level && h >= level) wickTouches += 1;
+          if (l <= onUpper && h >= onLower) bandTouches += 1;
+        }
+
+        const cl = Number(c.close);
+        if (!Number.isNaN(cl)) {
+          if (cl >= aboveFloor && cl <= aboveCeil) closeAbove += 1;
+          else if (cl >= onLower && cl < onUpper) closeOn += 1;
+          else if (cl >= belowFloor && cl < belowCeil) closeBelow += 1;
+          else closeOut += 1;
+        }
+      }
+      const zoneRange = (zoneHigh !== -Infinity && zoneLow !== Infinity) ? (zoneHigh - zoneLow) : 0;
+      const pctRangeVsStartClose = startClose ? (zoneRange / startClose) * 100 : 0;
+
+      const startVol = startCandle && startCandle.volume != null ? Number(startCandle.volume) : null;
+      const endVol = endCandle && endCandle.volume != null ? Number(endCandle.volume) : null;
+
+      const emaStart = { e9: e9[iStart], e20: e20[iStart], e30: e30[iStart] };
+      const emaEnd = { e9: e9[iEnd], e20: e20[iEnd], e30: e30[iEnd] };
+
+      const params = new URLSearchParams({
+        ticker,
+        level: level.toString(),
+        start_ms: startMs.toString(),
+        end_ms: endMs.toString(),
+      });
+
+      let resp;
+      try {
+        resp = await fetch('/api/live/fast?' + params.toString());
+      } catch (e) {
+        summaryEl.innerHTML = `<span class="err">Request failed: ${e.message}</span>`;
+        return;
+      }
+
+      const data = await resp.json();
+      if (data.error) {
+        summaryEl.innerHTML = `<span class="err">${data.error}</span>`;
+        return;
+      }
+
+      const levelData = data.level_data || {};
+      const segs = (levelData.zone_segments || []);
+      lastSegments = segs;
+      lastSegmentsMeta = { ticker, level, startMs, endMs };
+      renderTape();
+      const totalBuy = segs.reduce((a, s) => a + (s.buy_vol || 0), 0);
+      const totalSell = segs.reduce((a, s) => a + (s.sell_vol || 0), 0);
+      const totalVol = totalBuy + totalSell;
+      const totalDelta = totalBuy - totalSell;
+      const instBuy = segs.reduce((a, s) => a + (s.inst_buy || 0), 0);
+      const instSell = segs.reduce((a, s) => a + (s.inst_sell || 0), 0);
+      const instVol = instBuy + instSell;
+
+      let conflict = 0;
+      let soakAtSupport = 0; // sellers won but INST buying (absorption/soak proxy)
+      const byZone = {
+        ABOVE: { segs: 0, buy: 0, sell: 0, instBuy: 0, instSell: 0, conflict: 0, soak: 0, ms: 0 },
+        ON:    { segs: 0, buy: 0, sell: 0, instBuy: 0, instSell: 0, conflict: 0, soak: 0, ms: 0 },
+        BELOW: { segs: 0, buy: 0, sell: 0, instBuy: 0, instSell: 0, conflict: 0, soak: 0, ms: 0 },
+        OUT:   { segs: 0, buy: 0, sell: 0, instBuy: 0, instSell: 0, conflict: 0, soak: 0, ms: 0 },
+      };
+
+      // IMPORTANT:
+      // Prefer per-band volumes returned by the backend (most accurate: "were buyers/sellers ON my line?").
+      // If those keys aren't present, fall back to the segment's zone label so the summary always matches the tape table.
+      // We consider per-band breakdown "usable" only if any segment actually has non-zero band volume.
+      // Some backends may emit the keys but leave them all zero; in that case fall back to segment.zone.
+      const bandDataUsable = segs.some(s =>
+        (Number(s.total_vol_on || 0) +
+          Number(s.total_vol_above || 0) +
+          Number(s.total_vol_below || 0) +
+          Number(s.total_vol_out || 0)) > 0
+      );
+
+      if (bandDataUsable) {
+        for (const s of segs) {
+          const ms = (s.start_ts_ms != null && s.end_ts_ms != null) ? Math.max(0, Number(s.end_ts_ms) - Number(s.start_ts_ms)) : 0;
+
+          function addBand(name, totalKey, buyKey, sellKey, instBuyKey, instSellKey) {
+            const total = Number(s[totalKey] || 0);
+            if (!(total > 0)) return;
+            const buyVol = Number(s[buyKey] || 0);
+            const sellVol = Number(s[sellKey] || 0);
+            const delta = buyVol - sellVol;
+            const buyersWon = delta > 0 && total > 0 && (delta / total) > 0.05;
+            const sellersWon = delta < 0 && total > 0 && ((-delta) / total) > 0.05;
+            const ib = Number(s[instBuyKey] || 0);
+            const is = Number(s[instSellKey] || 0);
+
+            const z = byZone[name] || byZone.OUT;
+            z.segs += 1;
+            z.ms += ms;
+            z.buy += buyVol;
+            z.sell += sellVol;
+            z.instBuy += ib;
+            z.instSell += is;
+
+            const isConflict = (buyersWon && is > ib) || (sellersWon && ib > is);
+            if (isConflict) {
+              conflict += 1;
+              z.conflict += 1;
+            }
+
+            const isSoak = sellersWon && ib > is;
+            if (isSoak) {
+              z.soak += 1;
+              if (name === 'ON' || name === 'BELOW') soakAtSupport += 1;
+            }
+          }
+
+          addBand('ABOVE', 'total_vol_above', 'buy_vol_above', 'sell_vol_above', 'inst_buy_above', 'inst_sell_above');
+          addBand('ON', 'total_vol_on', 'buy_vol_on', 'sell_vol_on', 'inst_buy_on', 'inst_sell_on');
+          addBand('BELOW', 'total_vol_below', 'buy_vol_below', 'sell_vol_below', 'inst_buy_below', 'inst_sell_below');
+          addBand('OUT', 'total_vol_out', 'buy_vol_out', 'sell_vol_out', 'inst_buy_out', 'inst_sell_out');
+        }
+      } else {
+        for (const s of segs) {
+          const name = (s.zone || 'OUT');
+          const ms = (s.start_ts_ms != null && s.end_ts_ms != null) ? Math.max(0, Number(s.end_ts_ms) - Number(s.start_ts_ms)) : 0;
+          const buyVol = Number(s.buy_vol || 0);
+          const sellVol = Number(s.sell_vol || 0);
+          const total = buyVol + sellVol;
+          if (!(total > 0)) continue;
+
+          const delta = buyVol - sellVol;
+          const buyersWon = delta > 0 && (delta / total) > 0.05;
+          const sellersWon = delta < 0 && ((-delta) / total) > 0.05;
+          const ib = Number(s.inst_buy || 0);
+          const is = Number(s.inst_sell || 0);
+
+          const z = byZone[name] || byZone.OUT;
+          z.segs += 1;
+          z.ms += ms;
+          z.buy += buyVol;
+          z.sell += sellVol;
+          z.instBuy += ib;
+          z.instSell += is;
+
+          const isConflict = (buyersWon && is > ib) || (sellersWon && ib > is);
+          if (isConflict) {
+            conflict += 1;
+            z.conflict += 1;
+          }
+
+          const isSoak = sellersWon && ib > is;
+          if (isSoak) {
+            z.soak += 1;
+            if (name === 'ON' || name === 'BELOW') soakAtSupport += 1;
+          }
+        }
+      }
+
+      const buyersPct = totalVol > 0 ? (100 * totalBuy / totalVol) : 0;
+      const trend = pctCloseToClose >= 0 ? 'UP' : 'DOWN';
+      const emaAlignEnd =
+        (emaEnd.e9 > emaEnd.e20 && emaEnd.e20 > emaEnd.e30) ? 'Bull (9>20>30)' :
+        (emaEnd.e9 < emaEnd.e20 && emaEnd.e20 < emaEnd.e30) ? 'Bear (9<20<30)' :
+        'Mixed';
+
+      const emaMsg = `EMA end: ${emaAlignEnd} | EMA9=${(emaEnd.e9||0).toFixed(4)} EMA20=${(emaEnd.e20||0).toFixed(4)} EMA30=${(emaEnd.e30||0).toFixed(4)}`;
+      const flowMsg = `Flow: buyers ${buyersPct.toFixed(1)}% | Δ=${Math.round(totalDelta).toLocaleString()} | INST ${Math.round(instBuy).toLocaleString()}B/${Math.round(instSell).toLocaleString()}S | conflicts=${conflict}`;
+
+      const ds = levelData.defense_score || {};
+      const as = levelData.aggression_score || {};
+      const ms = levelData.market_state || {};
+      const setupOn = data.ema_macd?.setup_30s?.setup_on ? 'ON' : 'OFF';
+      const emaStack30s = data.ema_macd?.ema_stack?.['30s'] || null;
+
+      // Clean strings (avoid any weird encoding artifacts in older lines)
+      const flowMsg2 = `Flow: buyers ${buyersPct.toFixed(1)}% | Delta=${Math.round(totalDelta).toLocaleString()} | INST ${Math.round(instBuy).toLocaleString()}B/${Math.round(instSell).toLocaleString()}S | conflicts=${conflict} | soaks=${soakAtSupport}`;
+      const onSegsList = bandDataUsable
+        ? segs.filter(s => Number(s.total_vol_on || 0) > 0)
+        : segs.filter(s => (s.zone || 'OUT') === 'ON' && (Number(s.buy_vol || 0) + Number(s.sell_vol || 0)) > 0);
+      const onBuyTotal = bandDataUsable
+        ? segs.reduce((a, s) => a + Number(s.buy_vol_on || 0), 0)
+        : onSegsList.reduce((a, s) => a + Number(s.buy_vol || 0), 0);
+      const onSellTotal = bandDataUsable
+        ? segs.reduce((a, s) => a + Number(s.sell_vol_on || 0), 0)
+        : onSegsList.reduce((a, s) => a + Number(s.sell_vol || 0), 0);
+      const onVolTotal = onBuyTotal + onSellTotal;
+      const onDeltaTotal = onBuyTotal - onSellTotal;
+      const onInstBuyTotal = bandDataUsable
+        ? segs.reduce((a, s) => a + Number(s.inst_buy_on || 0), 0)
+        : onSegsList.reduce((a, s) => a + Number(s.inst_buy || 0), 0);
+      const onInstSellTotal = bandDataUsable
+        ? segs.reduce((a, s) => a + Number(s.inst_sell_on || 0), 0)
+        : onSegsList.reduce((a, s) => a + Number(s.inst_sell || 0), 0);
+      const onSegs = onSegsList.length;
+      const onMsg = onVolTotal > 0
+        ? `ON band: segs=${onSegs} buy=${Math.round(onBuyTotal).toLocaleString()} sell=${Math.round(onSellTotal).toLocaleString()} Delta=${Math.round(onDeltaTotal).toLocaleString()} INST ${Math.round(onInstBuyTotal).toLocaleString()}B/${Math.round(onInstSellTotal).toLocaleString()}S`
+        : `ON band: segs=0 (no trades in +${onPctAbove}%/-${onPctBelow}%)`;
+
+      // ======= Stages (auto based on segment count) =======
+      // < 6 segments: 2 stages (1/1)
+      // 6–50 segments: 3 stages (1/2/3)
+      // > 50 segments: 4 stages (1/2/2/3)
+      function splitStages(allSegs) {
+        const n = allSegs.length;
+        if (n === 0) return { stages: [], weights: [] };
+
+        if (n < 6) {
+          const mid = Math.max(1, Math.floor(n / 2));
+          return {
+            stages: [allSegs.slice(0, mid), allSegs.slice(mid)],
+            weights: [1, 1],
+          };
+        }
+
+        if (n > 50) {
+          const q = Math.max(1, Math.floor(n / 4));
+          return {
+            stages: [allSegs.slice(0, q), allSegs.slice(q, 2 * q), allSegs.slice(2 * q, 3 * q), allSegs.slice(3 * q)],
+            weights: [1, 2, 2, 3],
+          };
+        }
+
+        // 3-stage default, keep last ~3 segments as confirm for short zones
+        if (n < 9) {
+          const confirmN = Math.min(3, n);
+          const s3 = allSegs.slice(n - confirmN);
+          const rest = allSegs.slice(0, n - confirmN);
+          const mid = Math.floor(rest.length / 2);
+          return { stages: [rest.slice(0, mid), rest.slice(mid), s3], weights: [1, 2, 3] };
+        }
+
+        const third = Math.floor(n / 3);
+        return {
+          stages: [allSegs.slice(0, third), allSegs.slice(third, 2 * third), allSegs.slice(2 * third)],
+          weights: [1, 2, 3],
+        };
+      }
+
+      function stageStats(stageSegs) {
+        const buy = stageSegs.reduce((a, s) => a + Number(s.buy_vol || 0), 0);
+        const sell = stageSegs.reduce((a, s) => a + Number(s.sell_vol || 0), 0);
+        const vol = buy + sell;
+        const delta = buy - sell;
+        const buyersPct = vol > 0 ? (100 * buy / vol) : 0;
+        const instBuy = stageSegs.reduce((a, s) => a + Number(s.inst_buy || 0), 0);
+        const instSell = stageSegs.reduce((a, s) => a + Number(s.inst_sell || 0), 0);
+        const instDelta = instBuy - instSell;
+        const instShare = vol > 0 ? (100 * (instBuy + instSell) / vol) : 0;
+
+        let conflicts = 0, soaks = 0, ms = 0;
+        for (const s of stageSegs) {
+          const b = Number(s.buy_vol || 0);
+          const se = Number(s.sell_vol || 0);
+          const tv = b + se;
+          const d = b - se;
+          const buyersWon = d > 0 && tv > 0 && (d / tv) > 0.05;
+          const sellersWon = d < 0 && tv > 0 && ((-d) / tv) > 0.05;
+          const ib = Number(s.inst_buy || 0);
+          const is = Number(s.inst_sell || 0);
+          if ((buyersWon && is > ib) || (sellersWon && ib > is)) conflicts += 1;
+          if (sellersWon && ib > is) soaks += 1;
+          if (s.start_ts_ms != null && s.end_ts_ms != null) ms += Math.max(0, Number(s.end_ts_ms) - Number(s.start_ts_ms));
+        }
+
+        const startPx = stageSegs.length ? Number(stageSegs[0].start_price ?? stageSegs[0].display_price ?? 0) : 0;
+        const endPx = stageSegs.length ? Number(stageSegs[stageSegs.length - 1].end_price ?? stageSegs[stageSegs.length - 1].display_price ?? 0) : 0;
+        const pxChg = startPx ? ((endPx - startPx) / startPx) * 100 : 0;
+
+        return { n: stageSegs.length, ms, pxChg, buyersPct, delta, instDelta, instShare, conflicts, soaks };
+      }
+
+      const { stages: stageSegs, weights: stageWeights } = splitStages(segs);
+      const stageStatsList = stageSegs.map(stageStats);
+
+      function zoneAgg(stageSegs) {
+        const out = {
+          ABOVE: { segs: 0, buy: 0, sell: 0, instBuy: 0, instSell: 0, conflict: 0, soak: 0, ms: 0 },
+          ON:    { segs: 0, buy: 0, sell: 0, instBuy: 0, instSell: 0, conflict: 0, soak: 0, ms: 0 },
+          BELOW: { segs: 0, buy: 0, sell: 0, instBuy: 0, instSell: 0, conflict: 0, soak: 0, ms: 0 },
+          OUT:   { segs: 0, buy: 0, sell: 0, instBuy: 0, instSell: 0, conflict: 0, soak: 0, ms: 0 },
+        };
+        for (const s of stageSegs) {
+          const ms = (s.start_ts_ms != null && s.end_ts_ms != null) ? Math.max(0, Number(s.end_ts_ms) - Number(s.start_ts_ms)) : 0;
+
+          if (!bandDataUsable) {
+            const name = (s.zone || 'OUT');
+            const buyVol = Number(s.buy_vol || 0);
+            const sellVol = Number(s.sell_vol || 0);
+            const total = buyVol + sellVol;
+            if (!(total > 0)) continue;
+            const delta = buyVol - sellVol;
+            const buyersWon = delta > 0 && (delta / total) > 0.05;
+            const sellersWon = delta < 0 && ((-delta) / total) > 0.05;
+            const ib = Number(s.inst_buy || 0);
+            const is = Number(s.inst_sell || 0);
+
+            const z = out[name] || out.OUT;
+            z.segs += 1;
+            z.ms += ms;
+            z.buy += buyVol;
+            z.sell += sellVol;
+            z.instBuy += ib;
+            z.instSell += is;
+            if ((buyersWon && is > ib) || (sellersWon && ib > is)) z.conflict += 1;
+            if (sellersWon && ib > is) z.soak += 1;
+            continue;
+          }
+
+          function addBand(name, totalKey, buyKey, sellKey, instBuyKey, instSellKey) {
+            const total = Number(s[totalKey] || 0);
+            if (!(total > 0)) return;
+            const buyVol = Number(s[buyKey] || 0);
+            const sellVol = Number(s[sellKey] || 0);
+            const delta = buyVol - sellVol;
+            const buyersWon = delta > 0 && total > 0 && (delta / total) > 0.05;
+            const sellersWon = delta < 0 && total > 0 && ((-delta) / total) > 0.05;
+            const ib = Number(s[instBuyKey] || 0);
+            const is = Number(s[instSellKey] || 0);
+
+            const z = out[name] || out.OUT;
+            z.segs += 1;
+            z.ms += ms;
+            z.buy += buyVol;
+            z.sell += sellVol;
+            z.instBuy += ib;
+            z.instSell += is;
+
+            if ((buyersWon && is > ib) || (sellersWon && ib > is)) z.conflict += 1;
+            if (sellersWon && ib > is) z.soak += 1;
+          }
+
+          addBand('ABOVE', 'total_vol_above', 'buy_vol_above', 'sell_vol_above', 'inst_buy_above', 'inst_sell_above');
+          addBand('ON', 'total_vol_on', 'buy_vol_on', 'sell_vol_on', 'inst_buy_on', 'inst_sell_on');
+          addBand('BELOW', 'total_vol_below', 'buy_vol_below', 'sell_vol_below', 'inst_buy_below', 'inst_sell_below');
+          addBand('OUT', 'total_vol_out', 'buy_vol_out', 'sell_vol_out', 'inst_buy_out', 'inst_sell_out');
+        }
+        return out;
+      }
+
+      const stageZonesList = stageSegs.map(zoneAgg);
+
+      // ======= Thesis (minimal v1) =======
+      // Goal: reduce panic + missed reversals with a simple 3-state read.
+      // - INVALID: 2 consecutive segments below ON lower bound after first break.
+      // - CONFIRMED: after first below-break, 2 of next 3 segments have ON-band delta > 0 AND we see >= 1 segment above ON upper bound.
+      // - WAIT: everything else.
+      const THESIS_BELOW_ACCEPT_CONSEC = 2;
+      const THESIS_ON_POS_REQUIRED = 2;
+      const THESIS_ON_WINDOW = 3;
+      const THESIS_ABOVE_WINDOW = 5;
+
+      function segRepPrice(s) {
+        const p = Number(s.display_price ?? s.end_price ?? s.start_price ?? 0);
+        return Number.isFinite(p) ? p : 0;
+      }
+      function isBelowBreak(s) {
+        const p = segRepPrice(s);
+        return p > 0 && p < onLower;
+      }
+      function isAboveBand(s) {
+        const p = segRepPrice(s);
+        return p > 0 && p > onUpper;
+      }
+      function onBandDelta(s) {
+        if (bandDataUsable) return Number(s.buy_vol_on || 0) - Number(s.sell_vol_on || 0);
+        return Number(s.delta || 0);
+      }
+      function isOnBandPos(s) {
+        const p = segRepPrice(s);
+        if (!(p > 0 && p >= onLower && p <= onUpper)) return false;
+        return onBandDelta(s) > 0;
+      }
+
+      let thesis = { state: 'WAIT', details: '' };
+      const firstBelowIdx = segs.findIndex(isBelowBreak);
+      if (firstBelowIdx < 0) {
+        thesis = { state: 'WAIT', details: 'no break below band' };
+      } else {
+        // Invalidation: below acceptance (consecutive below-break segments)
+        let consec = 0;
+        let hasAcceptance = false;
+        for (let i = firstBelowIdx; i < segs.length; i++) {
+          if (isBelowBreak(segs[i])) consec += 1;
+          else consec = 0;
+          if (consec >= THESIS_BELOW_ACCEPT_CONSEC) { hasAcceptance = true; break; }
+        }
+
+        if (hasAcceptance) {
+          thesis = { state: 'INVALID', details: `acceptance below (${THESIS_BELOW_ACCEPT_CONSEC}x consecutive)` };
+        } else {
+          const onWin = segs.slice(firstBelowIdx + 1, firstBelowIdx + 1 + THESIS_ON_WINDOW);
+          const aboveWin = segs.slice(firstBelowIdx + 1, firstBelowIdx + 1 + THESIS_ABOVE_WINDOW);
+          const onPos = onWin.reduce((a, s) => a + (isOnBandPos(s) ? 1 : 0), 0);
+          const aboveSeen = aboveWin.some(isAboveBand);
+          if (onPos >= THESIS_ON_POS_REQUIRED && aboveSeen) {
+            thesis = { state: 'CONFIRMED', details: `reclaim (${onPos}/${THESIS_ON_WINDOW} ON+ & above)` };
+          } else {
+            thesis = { state: 'WAIT', details: `need reclaim (${onPos}/${THESIS_ON_WINDOW} ON+) and above` };
+          }
+        }
+      }
+
+      function onStageMsg(stageIdx, stageSegsOne) {
+        const onSegsOne = bandDataUsable
+          ? stageSegsOne.filter(s => Number(s.total_vol_on || 0) > 0)
+          : stageSegsOne.filter(s => (s.zone || 'OUT') === 'ON' && (Number(s.buy_vol || 0) + Number(s.sell_vol || 0)) > 0);
+        const buy = bandDataUsable
+          ? stageSegsOne.reduce((a, s) => a + Number(s.buy_vol_on || 0), 0)
+          : onSegsOne.reduce((a, s) => a + Number(s.buy_vol || 0), 0);
+        const sell = bandDataUsable
+          ? stageSegsOne.reduce((a, s) => a + Number(s.sell_vol_on || 0), 0)
+          : onSegsOne.reduce((a, s) => a + Number(s.sell_vol || 0), 0);
+        const vol = buy + sell;
+        const d = buy - sell;
+        const ib = bandDataUsable
+          ? stageSegsOne.reduce((a, s) => a + Number(s.inst_buy_on || 0), 0)
+          : onSegsOne.reduce((a, s) => a + Number(s.inst_buy || 0), 0);
+        const is = bandDataUsable
+          ? stageSegsOne.reduce((a, s) => a + Number(s.inst_sell_on || 0), 0)
+          : onSegsOne.reduce((a, s) => a + Number(s.inst_sell || 0), 0);
+        const segCount = onSegsOne.length;
+        if (!(vol > 0)) return `${stageIdx} ON: none`;
+        const bp = 100 * buy / vol;
+        return `${stageIdx} ON: segs=${segCount} buyers=${bp.toFixed(1)}% Delta=${Math.round(d).toLocaleString()} INST ${Math.round(ib).toLocaleString()}B/${Math.round(is).toLocaleString()}S`;
+      }
+
+      function stageLabel(st) {
+        // POS: price up + delta up
+        // NEG: price down + delta down
+        // ABSORB_POS: price up + delta down with absorption hints (soak/conflict/INST buying)
+        // MIXED: everything else
+        const px = Number(st.pxChg || 0);
+        const d = Number(st.delta || 0);
+        const instD = Number(st.instDelta || 0);
+        const hasAbsorbHint = (Number(st.soaks || 0) > 0) || (Number(st.conflicts || 0) > 0) || (instD > 0);
+        if (px > 0 && d > 0) return 'POS';
+        if (px < 0 && d < 0) return 'NEG';
+        if (px > 0 && d < 0 && hasAbsorbHint) return 'ABSORB_POS';
+        return 'MIXED';
+      }
+
+      const stageLabels = stageStatsList.map(stageLabel);
+      const scheme = stageWeights.join('/');
+      const maxPoints = stageWeights.reduce((a, w) => a + w, 0);
+      const confirmIndex = stageWeights.length - 1;
+
+      function isPositiveLabel(lbl) {
+        return lbl === 'POS' || lbl === 'ABSORB_POS';
+      }
+
+      let totalPoints = 0;
+      for (let i = 0; i < stageWeights.length; i++) {
+        if (isPositiveLabel(stageLabels[i])) totalPoints += stageWeights[i];
+      }
+
+      const confirmOn = isPositiveLabel(stageLabels[confirmIndex]);
+      const confirmPoints = confirmOn ? stageWeights[confirmIndex] : 0;
+      const setupMax = stageWeights.slice(0, -1).reduce((a, w) => a + w, 0);
+      const setupPoints = totalPoints - confirmPoints;
+
+      const stageScoreLine = `${totalPoints}/${maxPoints} | Setup ${setupPoints}/${setupMax} | Confirm ${confirmOn ? 'YES' : 'NO'} | Scheme ${scheme} | Labels ${stageLabels.join('/')}`;
+      let stageVerdict = '';
+      if (totalPoints === maxPoints) stageVerdict = 'CONFIRMED';
+      else if (setupPoints === setupMax && !confirmOn) stageVerdict = 'STRONG WATCH (no confirmation yet)';
+      else if (totalPoints >= Math.max(2, Math.floor(maxPoints * 0.7))) stageVerdict = 'VERY STRONG WATCH';
+      else if (totalPoints >= Math.max(2, Math.floor(maxPoints * 0.4))) stageVerdict = 'WATCH';
+      else stageVerdict = 'WEAK';
+
+      // ======= Insights (simple, but "don't miss" key regimes) =======
+      const insights = [];
+      function addInsight(title, detail) {
+        insights.push(`${title}: ${detail}`);
+      }
+
+      const sellersPct = 100 - buyersPct;
+      const instSharePct = totalVol > 0 ? (100 * instVol / totalVol) : 0;
+      const instDelta = instBuy - instSell;
+
+      // Trade-size composition: many small trades vs fewer big trades
+      let posTrades = 0, negTrades = 0, posVol = 0, negVol = 0;
+      for (const s of segs) {
+        const d = Number(s.delta || 0);
+        const tv = Number(s.total_vol || 0);
+        const tc = Number(s.trade_count || 0);
+        if (d > 0) { posTrades += tc; posVol += tv; }
+        else if (d < 0) { negTrades += tc; negVol += tv; }
+      }
+      const avgPosSize = posTrades > 0 ? (posVol / posTrades) : 0;
+      const avgNegSize = negTrades > 0 ? (negVol / negTrades) : 0;
+
+      // Soak/absorption at support is most meaningful when it happens ON/BELOW
+      const soakOnBelow = (byZone.ON.soak || 0) + (byZone.BELOW.soak || 0);
+      if (soakOnBelow > 0) {
+        addInsight('Absorption/Soak', `${soakOnBelow} segments (sellers won but INST buying) ON/BELOW`);
+      }
+      if (sellersPct >= 58 && instDelta > 0) {
+        addInsight('Sell pressure + INST buying', `sellers ${sellersPct.toFixed(1)}% but INST net +${Math.round(instDelta).toLocaleString()}`);
+      }
+      if (buyersPct >= 58 && instDelta < 0) {
+        addInsight('Buy pressure + INST selling', `buyers ${buyersPct.toFixed(1)}% but INST net ${Math.round(instDelta).toLocaleString()}`);
+      }
+      if (instSharePct >= 20) {
+        addInsight('Institutional participation', `${instSharePct.toFixed(1)}% of volume tagged as large trades`);
+      } else if (instVol === 0 && totalVol > 0) {
+        addInsight('No large prints', `no trades >= 5,000 shares detected in this window`);
+      }
+      if (negTrades > posTrades && avgNegSize > 0 && avgPosSize > 0 && avgNegSize < avgPosSize * 0.7) {
+        addInsight('Many small sellers', `sell trades ${negTrades.toLocaleString()} vs buy ${posTrades.toLocaleString()} with smaller avg size`);
+      }
+      if (posTrades < negTrades && avgPosSize > 0 && avgNegSize > 0 && avgPosSize > avgNegSize * 1.3) {
+        addInsight('Fewer but larger buyers', `buy avg size ~${avgPosSize.toFixed(0)} vs sell ~${avgNegSize.toFixed(0)}`);
+      }
+      if (conflict >= 3) {
+        addInsight('High conflict', `${conflict} conflict segments (INST vs winner disagreement)`);
+      }
+
+      const lines = [];
+      lines.push(`Zone ${fmtTime(zoneStartTimeSec)} → ${fmtTime(zoneEndTimeSec)} @ Level $${level.toFixed(4)}`);
+      const startCvText = `start close ${startClose.toFixed(4)}` + (startVol != null ? ` | start vol ${startVol.toLocaleString()}` : '');
+      const endCvText = `end close ${endClose.toFixed(4)}` + (endVol != null ? ` | end vol ${endVol.toLocaleString()}` : '');
+      lines.push(`Price: ${trend} ${pctCloseToClose.toFixed(2)}% (${startCvText} → ${endCvText})`);
+      if (zoneRange > 0 && Number.isFinite(zoneHigh) && Number.isFinite(zoneLow)) {
+        lines.push(`Range: $${zoneLow.toFixed(4)} → $${zoneHigh.toFixed(4)} (${pctRangeVsStartClose.toFixed(2)}% of start close)`);
+      }
+      if (zoneBarVol > 0) {
+        lines.push(`Bar volume: ${Math.round(zoneBarVol).toLocaleString()}`);
+      }
+      lines.push(`Level touches: wick=${wickTouches} | band(+${onPctAbove}%/-${onPctBelow}%)=${bandTouches}`);
+      lines.push(`Close buckets: ABOVE=${closeAbove} ON=${closeOn} BELOW=${closeBelow} OUT=${closeOut}`);
+      lines.push(emaMsg);
+      if (emaStack30s && emaStack30s.bars >= 30) {
+        lines.push(`EMA 30s: ${emaStack30s.stack} | EMA9=${Number(emaStack30s.ema9).toFixed(4)} EMA20=${Number(emaStack30s.ema20).toFixed(4)} EMA30=${Number(emaStack30s.ema30).toFixed(4)}`);
+      } else if (emaStack30s) {
+        lines.push(`EMA 30s: (not enough 30s bars: ${emaStack30s.bars})`);
+      }
+      lines.push(flowMsg2);
+      lines.push(onMsg);
+      lines.push(`Setup (fast EMA/MACD): ${setupOn}`);
+      lines.push(`Thesis: ${thesis.state} (${thesis.details})`);
+      lines.push(`Stage score: ${stageScoreLine}`);
+      lines.push(`Stage status: ${stageVerdict}`);
+      const cov = data.coverage || null;
+      if (cov && (cov.trades_truncated || cov.covers_start === false || cov.covers_end === false)) {
+        const cs = (cov.covers_start === undefined) ? '?' : String(cov.covers_start);
+        const ce = (cov.covers_end === undefined) ? '?' : String(cov.covers_end);
+        lines.push(`Data warning: trades coverage incomplete (covers_start=${cs} covers_end=${ce} truncated=${String(!!cov.trades_truncated)} trades=${(cov.trades_count ?? '?')})`);
+      }
+      if (typeof ds.score !== 'undefined' || typeof as.score !== 'undefined') {
+        lines.push(`Scores: Defense=${ds.score ?? '—'} | Aggression=${as.score ?? '—'}`);
+      }
+      if (ms.state) lines.push(`State: ${ms.state}`);
+      if (levelData.zone_analysis?.summary) lines.push(`Notes: ${levelData.zone_analysis.summary}`);
+
+      function fmtZoneRow(name, z) {
+        const vol = (z.buy + z.sell);
+        const bp = vol > 0 ? (100 * z.buy / vol) : 0;
+        const delta = z.buy - z.sell;
+        const mins = z.ms > 0 ? (z.ms / 60000) : 0;
+        return `${name}: segs=${z.segs} time=${mins.toFixed(1)}m buyers=${bp.toFixed(1)}% Δ=${Math.round(delta).toLocaleString()} INST ${Math.round(z.instBuy).toLocaleString()}B/${Math.round(z.instSell).toLocaleString()}S conflict=${z.conflict} soak=${z.soak}`;
+      }
+      lines.push('---');
+      function fmtZoneRow2(name, z) {
+        const vol = (z.buy + z.sell);
+        const bp = vol > 0 ? (100 * z.buy / vol) : 0;
+        const delta = z.buy - z.sell;
+        const mins = z.ms > 0 ? (z.ms / 60000) : 0;
+        return `${name}: segs=${z.segs} time=${mins.toFixed(1)}m buyers=${bp.toFixed(1)}% Delta=${Math.round(delta).toLocaleString()} INST ${Math.round(z.instBuy).toLocaleString()}B/${Math.round(z.instSell).toLocaleString()}S conflict=${z.conflict} soak=${z.soak}`;
+      }
+      lines.push('Zone breakdown (from dots pipeline):');
+      lines.push(fmtZoneRow2('ABOVE', byZone.ABOVE));
+      lines.push(fmtZoneRow2('ON', byZone.ON));
+      lines.push(fmtZoneRow2('BELOW', byZone.BELOW));
+      lines.push(fmtZoneRow2('OUT', byZone.OUT));
+
+      function fmtStageRow(label, st) {
+        const mins = st.ms > 0 ? (st.ms / 60000) : 0;
+        return `${label}: segs=${st.n} time=${mins.toFixed(1)}m px=${st.pxChg.toFixed(2)}% buyers=${st.buyersPct.toFixed(1)}% Delta=${Math.round(st.delta).toLocaleString()} INST_Delta=${Math.round(st.instDelta).toLocaleString()} conflict=${st.conflicts} soak=${st.soaks}`;
+      }
+      lines.push('---');
+      lines.push(`Stages (early → confirm) | Scheme ${scheme}:`);
+      for (let i = 0; i < stageStatsList.length; i++) {
+        lines.push(fmtStageRow(String(i + 1), stageStatsList[i]));
+      }
+      lines.push('---');
+      lines.push('ON band per stage:');
+      for (let i = 0; i < stageSegs.length; i++) {
+        lines.push(onStageMsg(String(i + 1), stageSegs[i]));
+      }
+
+      function fmtStageZones(label, z) {
+        function fmt(name) {
+          const zz = z[name];
+          const vol = (zz.buy + zz.sell);
+          const bp = vol > 0 ? (100 * zz.buy / vol) : 0;
+          const delta = zz.buy - zz.sell;
+          const instDelta = zz.instBuy - zz.instSell;
+          return `${name}: buyers=${bp.toFixed(1)}% Delta=${Math.round(delta).toLocaleString()} INST_Delta=${Math.round(instDelta).toLocaleString()} conf=${zz.conflict} soak=${zz.soak}`;
+        }
+        return `${label} zones | ${fmt('ABOVE')} | ${fmt('ON')} | ${fmt('BELOW')} | ${fmt('OUT')}`;
+      }
+      for (let i = 0; i < stageZonesList.length; i++) {
+        lines.push(fmtStageZones(String(i + 1), stageZonesList[i]));
+      }
+
+      if (insights.length) {
+        lines.push('---');
+        lines.push('Insights:');
+        for (const it of insights.slice(0, 8)) lines.push(`- ${it}`);
+      }
+
+      summaryEl.textContent = lines.join('\n');
+      // Keep a compact summary for quick copy/paste notes.
+      lastCompactSummary = buildCompactSummary({
+        ticker,
+        level,
+        startSec: zoneStartTimeSec,
+        endSec: zoneEndTimeSec,
+        emaAlignEnd,
+        emaEnd,
+        emaStack30s,
+        setupOn,
+        stageScoreLine,
+        stageVerdict,
+        byZone,
+        scheme,
+        stageStatsList,
+        stageZonesList,
+        totalDelta,
+        buyersPct,
+        instBuy,
+        instSell,
+        conflict,
+        soakAtSupport,
+        thesis,
+      });
+    }
+
+    function buildCompactSummary(ctx) {
+      const tz = document.getElementById('timezone').value;
+      const start = new Date(ctx.startSec * 1000).toLocaleString('en-US', { timeZone: tz, hour12: false });
+      const end = new Date(ctx.endSec * 1000).toLocaleString('en-US', { timeZone: tz, hour12: false });
+      const lines = [];
+      lines.push(`${ctx.ticker} @ $${ctx.level.toFixed(4)} | ${start} → ${end}`);
+      lines.push(`EMA(${currentTimeframe})=${ctx.emaAlignEnd} | EMA(30s)=${ctx.emaStack30s?.stack ?? '—'} | Setup=${ctx.setupOn} | Stage=${ctx.stageScoreLine} | Status=${ctx.stageVerdict}`);
+      lines.push(`Flow: buyers ${ctx.buyersPct.toFixed(1)}% | Delta=${Math.round(ctx.totalDelta).toLocaleString()} | INST ${Math.round(ctx.instBuy).toLocaleString()}B/${Math.round(ctx.instSell).toLocaleString()}S | conflict=${ctx.conflict} | soaks=${ctx.soakAtSupport}`);
+      if (ctx.thesis && ctx.thesis.state) {
+        lines.push(`Thesis: ${ctx.thesis.state}${ctx.thesis.details ? ` (${ctx.thesis.details})` : ''}`);
+      }
+
+      function fmtZone(name, z) {
+        const vol = (z.buy + z.sell);
+        const bp = vol > 0 ? (100 * z.buy / vol) : 0;
+        const delta = z.buy - z.sell;
+        const mins = z.ms > 0 ? (z.ms / 60000) : 0;
+        return `${name}: time=${mins.toFixed(1)}m buyers=${bp.toFixed(1)}% Delta=${Math.round(delta).toLocaleString()} INST ${Math.round(z.instBuy).toLocaleString()}B/${Math.round(z.instSell).toLocaleString()}S conf=${z.conflict} soak=${z.soak}`;
+      }
+      lines.push(`Zones: ${fmtZone('ABOVE', ctx.byZone.ABOVE)} | ${fmtZone('ON', ctx.byZone.ON)} | ${fmtZone('BELOW', ctx.byZone.BELOW)} | ${fmtZone('OUT', ctx.byZone.OUT)}`);
+
+      function fmtStage(label, st) {
+        const mins = st.ms > 0 ? (st.ms / 60000) : 0;
+        return `${label}: segs=${st.n} time=${mins.toFixed(1)}m px=${st.pxChg.toFixed(2)}% buyers=${st.buyersPct.toFixed(1)}% Delta=${Math.round(st.delta).toLocaleString()} INST_Delta=${Math.round(st.instDelta).toLocaleString()} conf=${st.conflicts} soak=${st.soaks}`;
+      }
+      if (Array.isArray(ctx.stageStatsList) && ctx.stageStatsList.length) {
+        const parts = ctx.stageStatsList.map((st, idx) => fmtStage(String(idx + 1), st));
+        lines.push(`Stages (Scheme ${ctx.scheme ?? '—'}): ${parts.join(' | ')}`);
+      }
+      return lines.join('\n');
+    }
+
+    function renderTape() {
+      const body = document.getElementById('tape-body');
+      const metaEl = document.getElementById('tape-meta');
+      const filter = document.getElementById('tape-filter').value;
+      const tz = document.getElementById('timezone').value;
+
+      const allSegs = (lastSegments || []);
+      const bandDataUsable = allSegs.some(s =>
+        (Number(s.total_vol_on || 0) +
+          Number(s.total_vol_above || 0) +
+          Number(s.total_vol_below || 0) +
+          Number(s.total_vol_out || 0)) > 0
+      );
+
+      const segs = allSegs.filter(s => {
+        const z = (s.zone || 'OUT');
+        if (filter === 'ALL') return true;
+        if (filter === 'ON_BAND') {
+          return bandDataUsable ? Number(s.total_vol_on || 0) > 0 : z === 'ON';
+        }
+        return z === filter;
+      });
+
+      if (!segs.length) {
+        metaEl.textContent = '—';
+        body.innerHTML = `<tr><td colspan="13" style="text-align:left; padding:0.75rem; color: var(--text-muted);">No segments.</td></tr>`;
+        return;
+      }
+
+      const totalVol = segs.reduce((a, s) => {
+        if (filter === 'ON_BAND') return a + Number(s.buy_vol_on || 0) + Number(s.sell_vol_on || 0);
+        return a + Number(s.total_vol || 0);
+      }, 0);
+      metaEl.textContent = `${segs.length} segs | vol ${Math.round(totalVol).toLocaleString()}`;
+
+      function fmtTimeMs(ms) {
+        if (!ms) return '';
+        const d = new Date(Number(ms));
+        return d.toLocaleTimeString('en-US', { timeZone: tz, hour12: false });
+      }
+      function f0(v) { return Math.round(Number(v || 0)).toLocaleString(); }
+      function f1(v) { return Number(v || 0).toFixed(1); }
+      function f4(v) { return Number(v || 0).toFixed(4); }
+
+      let html = '';
+      for (const s of segs) {
+        const z = (filter === 'ON_BAND') ? 'ON' : (s.zone || 'OUT');
+        const buy = (filter === 'ON_BAND') ? Number(s.buy_vol_on || 0) : Number(s.buy_vol || 0);
+        const sell = (filter === 'ON_BAND') ? Number(s.sell_vol_on || 0) : Number(s.sell_vol || 0);
+        const vol = buy + sell;
+        const delta = buy - sell;
+        const buyersPct = vol > 0 ? (100 * buy / vol) : 0;
+        const tc = (filter === 'ON_BAND') ? null : Number(s.trade_count || 0);
+        const avgSz = (filter === 'ON_BAND') ? null : Number(s.avg_trade_size || 0);
+        const ib = (filter === 'ON_BAND') ? Number(s.inst_buy_on || 0) : Number(s.inst_buy || 0);
+        const is = (filter === 'ON_BAND') ? Number(s.inst_sell_on || 0) : Number(s.inst_sell || 0);
+        const instDelta = ib - is;
+
+        const buyersWon = delta > 0 && vol > 0 && (delta / vol) > 0.05;
+        const sellersWon = delta < 0 && vol > 0 && ((-delta) / vol) > 0.05;
+        const isConflict = (buyersWon && is > ib) || (sellersWon && ib > is);
+        const isSoak = sellersWon && ib > is;
+
+        let cls = '';
+        if (buyersWon) cls = 'row-buy';
+        else if (sellersWon) cls = 'row-sell';
+        if (isConflict) cls += ' row-conflict';
+        if (isSoak) cls += ' row-soak';
+
+        const tags = [
+          isConflict ? 'conflict' : null,
+          isSoak ? 'soak' : null,
+        ].filter(Boolean).join(',');
+
+        html += `
+          <tr class="${cls.trim()}">
+            <td>${fmtTimeMs(s.start_ts_ms)}</td>
+            <td style="text-align:left;">${z}</td>
+            <td>${filter === 'ON_BAND' ? '—' : f4(s.display_price || s.end_price || 0)}</td>
+            <td>${f0(vol)}</td>
+            <td>${f1(buyersPct)}%</td>
+            <td>${f0(delta)}</td>
+            <td>${f0(buy)}</td>
+            <td>${f0(sell)}</td>
+            <td>${f0(ib)}/${f0(is)}</td>
+            <td>${f0(instDelta)}</td>
+            <td>${tc == null ? '—' : f0(tc)}</td>
+            <td>${avgSz == null ? '—' : f0(avgSz)}</td>
+            <td style="text-align:left;">${tags}</td>
+          </tr>
+        `;
+      }
+      body.innerHTML = html;
+    }
+
+    // ======= Save zones (localStorage v1) =======
+    const LS_KEY = 'godmode_zones_v1';
+
+    function loadSaved() {
+      const el = document.getElementById('saved');
+      let zones = [];
+      try { zones = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch {}
+      if (!zones.length) { el.textContent = '(none)'; return; }
+      el.textContent = zones.map((z, i) =>
+        `${i+1}. ${z.ticker} ${z.tf} $${z.level.toFixed(4)} | ${z.start} → ${z.end}` +
+        (z.outcome ? ` | ${z.outcome.toUpperCase()}` : '') +
+        (typeof z.up_pct === 'number' ? ` | up ${z.up_pct.toFixed(1)}%` : '') +
+        (typeof z.high_price === 'number' ? ` | high $${z.high_price.toFixed(4)}` : '')
+      ).join('\n');
+    }
+
+    function saveZone() {
+      const ticker = document.getElementById('ticker').value.trim().toUpperCase();
+      const level = Number(lastRightClickPrice);
+      if (!ticker || !level || !zoneStartTimeSec || !zoneEndTimeSec) return;
+
+      // Outcome capture (manual v1)
+      // Goal: quickly tag whether this setup broke out and what high it reached.
+      // This lets you study "fail vs success" later using the same metrics.
+      let outcome = null;
+      let highPrice = null;
+      let upPct = null;
+      let notes = null;
+
+      const didBreakOut = window.confirm('Did it break out after this setup?\n\nOK = Yes\nCancel = No');
+      if (didBreakOut) {
+        outcome = 'breakout';
+        const hp = window.prompt('What was the HIGH price after the setup? (e.g. 10.00)', '');
+        if (hp != null && hp.trim() !== '') {
+          const parsed = Number(hp);
+          if (!Number.isNaN(parsed) && parsed > 0) {
+            highPrice = parsed;
+            upPct = ((highPrice - level) / level) * 100;
+          }
+        }
+      } else {
+        outcome = 'no_breakout';
+      }
+      const nt = window.prompt('Optional note (why it worked/failed):', '');
+      if (nt != null && nt.trim() !== '') notes = nt.trim();
+
+      let zones = [];
+      try { zones = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch {}
+      zones.unshift({
+        ticker,
+        tf: currentTimeframe,
+        level,
+        start: fmtTime(zoneStartTimeSec),
+        end: fmtTime(zoneEndTimeSec),
+        start_sec: zoneStartTimeSec,
+        end_sec: zoneEndTimeSec,
+        outcome,
+        high_price: highPrice,
+        up_pct: upPct,
+        notes,
+        saved_ms: Date.now(),
+      });
+      zones = zones.slice(0, 50);
+      localStorage.setItem(LS_KEY, JSON.stringify(zones));
+      loadSaved();
+    }
+
+    // ======= Wiring =======
+    document.getElementById('btn-load').addEventListener('click', loadChart);
+    document.getElementById('btn-clear').addEventListener('click', clearSelection);
+    document.getElementById('btn-analyze').addEventListener('click', analyzeZone);
+    document.getElementById('btn-save').addEventListener('click', saveZone);
+    document.getElementById('ticker').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadChart(); });
+
+    document.querySelectorAll('.tf-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        currentTimeframe = this.dataset.tf;
+        setStatus();
+        if (chartData.length) loadChart();
+      });
+    });
+
+    document.getElementById('timezone').addEventListener('change', () => {
+      setStatus();
+      if (chartData.length) loadChart();
+      loadSaved();
+    });
+
+    document.getElementById('tape-filter').addEventListener('change', renderTape);
+    document.getElementById('tape-copy').addEventListener('click', async () => {
+      if (!lastSegments || !lastSegments.length) return;
+      const filter = document.getElementById('tape-filter').value;
+      const allSegs = lastSegments;
+      const bandDataUsable = allSegs.some(s =>
+        (Number(s.total_vol_on || 0) +
+          Number(s.total_vol_above || 0) +
+          Number(s.total_vol_below || 0) +
+          Number(s.total_vol_out || 0)) > 0
+      );
+      const segs = allSegs.filter(s => {
+        const z = (s.zone || 'OUT');
+        if (filter === 'ALL') return true;
+        if (filter === 'ON_BAND') return bandDataUsable ? Number(s.total_vol_on || 0) > 0 : z === 'ON';
+        return z === filter;
+      });
+
+      const header = (filter === 'ON_BAND')
+        ? ['start_ts_ms','end_ts_ms','zone','on_vol','on_buy','on_sell','on_delta','on_inst_buy','on_inst_sell','on_inst_delta']
+        : ['start_ts_ms','end_ts_ms','zone','display_price','total_vol','buy_vol','sell_vol','delta','inst_buy','inst_sell','trade_count','avg_trade_size'];
+      const rows = [header.join(',')];
+      for (const s of segs) {
+        if (filter === 'ON_BAND') {
+          const buy = Number(s.buy_vol_on || 0);
+          const sell = Number(s.sell_vol_on || 0);
+          const vol = buy + sell;
+          const delta = buy - sell;
+          const ib = Number(s.inst_buy_on || 0);
+          const is = Number(s.inst_sell_on || 0);
+          rows.push([
+            s.start_ts_ms ?? '',
+            s.end_ts_ms ?? '',
+            'ON',
+            vol,
+            buy,
+            sell,
+            delta,
+            ib,
+            is,
+            (ib - is),
+          ].join(','));
+        } else {
+          rows.push([
+            s.start_ts_ms ?? '',
+            s.end_ts_ms ?? '',
+            s.zone ?? '',
+            s.display_price ?? '',
+            s.total_vol ?? '',
+            s.buy_vol ?? '',
+            s.sell_vol ?? '',
+            s.delta ?? '',
+            s.inst_buy ?? '',
+            s.inst_sell ?? '',
+            s.trade_count ?? '',
+            s.avg_trade_size ?? '',
+          ].join(','));
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(rows.join('\n'));
+      } catch (e) {
+        // fallback
+        const ta = document.createElement('textarea');
+        ta.value = rows.join('\n');
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      const metaEl = document.getElementById('tape-meta');
+      metaEl.textContent = metaEl.textContent + ' | copied';
+      setTimeout(() => renderTape(), 800);
+    });
+
+    document.getElementById('tape-summary').addEventListener('click', async () => {
+      if (!lastCompactSummary) return;
+      try {
+        await navigator.clipboard.writeText(lastCompactSummary);
+      } catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = lastCompactSummary;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      const metaEl = document.getElementById('tape-meta');
+      if (metaEl) {
+        metaEl.textContent = metaEl.textContent + ' | summary copied';
+        setTimeout(() => renderTape(), 800);
+      }
+    });
+
+    loadSaved();
+  </script>
+</body>
+</html>

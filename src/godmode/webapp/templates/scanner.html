@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Scanner</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; }
+      h2 { margin: 0 0 6px 0; }
+      .muted { color: #6b7280; font-size: 13px; }
+      .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+      .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background:#f3f4f6; margin-right: 6px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+      th, td { border: 1px solid #e5e7eb; padding: 8px; font-size: 13px; }
+      th { background: #f9fafb; text-align: left; }
+      code { background: #f6f6f6; padding: 2px 4px; border-radius: 4px; }
+      .good { color: #166534; font-weight: 600; }
+      .bad { color: #991b1b; font-weight: 600; }
+      .warn { color: #9a3412; font-weight: 600; }
+      .alerts { margin-top: 14px; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background: #fff; }
+      .alert-item { padding: 8px 0; border-bottom: 1px dashed #e5e7eb; }
+      .alert-item:last-child { border-bottom: none; }
+      .btn { padding: 8px 12px; border: 1px solid #d1d5db; background: #fff; border-radius: 8px; cursor: pointer; }
+      .btn:hover { background: #f9fafb; }
+    </style>
+  </head>
+  <body>
+    <p><a href="/">← sessions</a></p>
+    <h2>Downtrend Break Scanner</h2>
+    <div class="muted">Session: 3:00am–3:00pm CT • Refresh: {{ refresh_seconds }}s • Universe: top {{ top_n }} gainers</div>
+
+    <div class="row">
+      <span class="pill">+50% from 3am open</span>
+      <span class="pill">≥15% off HOD</span>
+      <span class="pill">volume ≥ 3M</span>
+      <button class="btn" onclick="refreshNow()">Refresh now</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <div class="alerts">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <b>Alerts</b>
+        <span class="muted" id="scan-time"></span>
+      </div>
+      <div id="alerts"></div>
+      <div class="muted" id="alerts-empty" style="margin-top: 8px;">No alerts yet.</div>
+    </div>
+
+    <h3 style="margin-top:16px;">Candidates</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>ticker</th>
+          <th>open</th>
+          <th>HOD</th>
+          <th>last</th>
+          <th>%up</th>
+          <th>%off</th>
+          <th>vol</th>
+          <th>signals</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <script>
+      const REFRESH_MS = {{ refresh_seconds }} * 1000;
+      let timer = null;
+
+      function fmtNum(x) {
+        if (x === null || x === undefined) return '—';
+        return Number(x).toLocaleString();
+      }
+      function fmtPct(x) {
+        if (x === null || x === undefined) return '—';
+        return (Number(x) * 100).toFixed(1) + '%';
+      }
+      function fmtPrice(x) {
+        if (x === null || x === undefined) return '—';
+        return '$' + Number(x).toFixed(4);
+      }
+
+      async function refreshNow() {
+        document.getElementById('status').textContent = 'scanning...';
+        try {
+          const resp = await fetch('/api/scanner');
+          const data = await resp.json();
+          render(data);
+          document.getElementById('status').textContent = data.paused ? 'paused' : 'ok';
+        } catch (e) {
+          document.getElementById('status').textContent = 'error: ' + e.message;
+        }
+      }
+
+      function render(data) {
+        document.getElementById('scan-time').textContent = data.now_ct || '';
+
+        const alertsEl = document.getElementById('alerts');
+        alertsEl.innerHTML = '';
+        const alerts = data.alerts || [];
+        document.getElementById('alerts-empty').style.display = alerts.length ? 'none' : 'block';
+        for (const a of alerts) {
+          const div = document.createElement('div');
+          div.className = 'alert-item';
+          div.innerHTML = `<code>${a.ticker}</code> <b>${a.kind}</b> <span class="muted">${a.when}</span><div class="muted">${a.detail || ''}</div>`;
+          alertsEl.appendChild(div);
+        }
+
+        const rows = document.getElementById('rows');
+        rows.innerHTML = '';
+        for (const r of (data.results || [])) {
+          const sigs = (r.signals || []).map(s => {
+            const ok = (s.ema_ok && s.macd_ok) ? 'good' : (s.ema200_touch_regain ? 'warn' : 'bad');
+            const parts = [];
+            if (s.ema_ok && s.macd_ok) parts.push('EMA+MACD');
+            if (s.ema200_touch_regain) parts.push('EMA200 regain');
+            const tier = s.macd_tier && s.macd_tier !== 'none' ? `(${s.macd_tier})` : '';
+            return `<span class="${ok}">${s.timeframe}:${parts.join('+') || '—'} ${tier}</span>`;
+          }).join('<br/>');
+
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><code>${r.ticker}</code></td>
+            <td>${fmtPrice(r.session_open)}</td>
+            <td>${fmtPrice(r.hod)}</td>
+            <td>${fmtPrice(r.last)}</td>
+            <td>${fmtPct(r.pct_up)}</td>
+            <td>${fmtPct(r.pct_off_hod)}</td>
+            <td>${fmtNum(r.volume)}</td>
+            <td>${sigs || '<span class="muted">—</span>'}</td>
+          `;
+          rows.appendChild(tr);
+        }
+      }
+
+      refreshNow();
+      timer = setInterval(refreshNow, REFRESH_MS);
+    </script>
+  </body>
+</html>
+

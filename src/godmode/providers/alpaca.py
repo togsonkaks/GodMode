@@ -64,6 +64,20 @@ def _parse_quote(symbol: str, row: dict[str, Any]) -> Quote:
         ask_size=float(row["as"]),
     )
 
+def _parse_bar(symbol: str, row: dict[str, Any]) -> dict[str, Any]:
+    ts_ms = _parse_iso_to_ms(row["t"])
+    return {
+        "ts_ms": ts_ms,
+        "symbol": symbol,
+        "open": float(row["o"]),
+        "high": float(row["h"]),
+        "low": float(row["l"]),
+        "close": float(row["c"]),
+        "volume": float(row.get("v", 0.0) or 0.0),
+        "trade_count": int(row.get("n", 0) or 0),
+        "vwap": float(row.get("vw")) if row.get("vw") is not None else None,
+    }
+
 
 @dataclass(frozen=True, slots=True)
 class AlpacaConfig:
@@ -101,10 +115,15 @@ class AlpacaProvider(DataProvider):
         *,
         api_key_env: str = "ALPACA_API_KEY",
         secret_key_env: str = "ALPACA_SECRET_KEY",
-        feed: AlpacaFeed = "sip",
+        feed: AlpacaFeed | None = None,
     ) -> "AlpacaProvider":
         api_key = os.environ.get(api_key_env, "")
         secret_key = os.environ.get(secret_key_env, "")
+        # Default to IEX unless explicitly set. Many Alpaca accounts are IEX-only, and
+        # hardcoding SIP causes 403s (breaking live dashboard + exports).
+        if feed is None:
+            env_feed = (os.environ.get("ALPACA_FEED") or "").strip().lower()
+            feed = env_feed if env_feed in {"iex", "sip"} else "iex"
         return cls(cfg=AlpacaConfig(api_key=api_key, secret_key=secret_key, feed=feed))
 
     async def aclose(self) -> None:
@@ -160,6 +179,36 @@ class AlpacaProvider(DataProvider):
         }
         rows = await self._paginate(url, params, "quotes")
         return [_parse_quote(s, row) for row in rows]
+
+    async def getBars(self, symbol: str, start: int, end: int, *, timeframe: str = "1Min") -> list[dict[str, Any]]:
+        """Fetch historical bars for symbol in [start, end] ms range."""
+        s = symbol.upper()
+        url = f"{self._cfg.data_base_url}/v2/stocks/{s}/bars"
+        params: dict[str, Any] = {
+            "start": _ms_to_rfc3339(start),
+            "end": _ms_to_rfc3339(end),
+            "timeframe": str(timeframe),
+            "feed": self._cfg.feed,
+            "limit": 10000,
+        }
+
+        out: list[dict[str, Any]] = []
+        next_token: Optional[str] = None
+        while True:
+            if next_token:
+                params["page_token"] = next_token
+            resp = await self._client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            bars = data.get("bars", [])
+            if bars:
+                out.extend(_parse_bar(s, b) for b in bars)
+            next_token = data.get("next_page_token")
+            if not next_token:
+                break
+        # Deterministic ordering
+        out.sort(key=lambda r: int(r.get("ts_ms", 0)))
+        return out
 
     async def subscribeTrades(self, symbols: list[str]) -> AsyncIterator[Trade]:
         """Stream real-time trades via WebSocket."""

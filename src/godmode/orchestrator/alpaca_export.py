@@ -46,6 +46,8 @@ async def export_alpaca_to_replay(
     if not qdf.empty:
         qdf = qdf.sort_values(["ts_ms"], kind="mergesort").reset_index(drop=True)
 
+    trades_path.parent.mkdir(parents=True, exist_ok=True)
+    quotes_path.parent.mkdir(parents=True, exist_ok=True)
     tdf.to_parquet(trades_path, index=False)
     qdf.to_parquet(quotes_path, index=False)
 

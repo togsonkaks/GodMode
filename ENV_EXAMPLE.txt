@@ -5,4 +5,7 @@
 ALPACA_API_KEY=YOUR_API_KEY_ID
 ALPACA_SECRET_KEY=YOUR_SECRET_KEY
 
+# Alpaca feed: "iex" (most accounts) or "sip" (paid full feed)
+ALPACA_FEED=iex
+
 

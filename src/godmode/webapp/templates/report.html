@@ -2,7 +2,11 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Report {{ ticker }} {{ date }} {{ session_id }}</title>
+    <title>{% if "_LIVE" in session_id %}🔴 LIVE {% endif %}Report {{ ticker }} {{ date }} {{ session_id }}</title>
+    {% if "_LIVE" in session_id %}
+    <!-- Auto-refresh every 10 seconds for live sessions -->
+    <meta http-equiv="refresh" content="10">
+    {% endif %}
     <style>
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
       table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
@@ -109,9 +113,333 @@
       .touch-scorecard .reasons ul { margin: 4px 0 0 18px; }
       .touch-scorecard .reasons .pos { color: #166534; }
       .touch-scorecard .reasons .neg { color: #991b1b; }
+
+      /* Zone story bands */
+      .zone-story {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #fff;
+        margin-bottom: 12px;
+      }
+      .zone-row {
+        display: grid;
+        grid-template-columns: 80px 1fr 80px;
+        align-items: center;
+        gap: 10px;
+        margin: 6px 0;
+      }
+      .zone-label { font-size: 12px; color: #111827; font-weight: 600; }
+      .zone-bar {
+        height: 18px;
+        border-radius: 999px;
+        position: relative;
+        border: 1px solid rgba(0,0,0,0.08);
+        overflow: hidden;
+      }
+      .zone-bar.neutral { background: #cfe8ff; }
+      .zone-bar.buy-medium { background: #fde68a; }
+      .zone-bar.buy-strong { background: #86efac; }
+      .zone-bar.sell-medium { background: #fdba74; }
+      .zone-bar.sell-strong { background: #fca5a5; }
+      .zone-meta { font-size: 11px; color: #6b7280; text-align: right; }
+      .zone-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        display: inline-block;
+        margin-left: 6px;
+        border: 1px solid rgba(0,0,0,0.15);
+        vertical-align: middle;
+      }
+      .zone-dot.inst-buy { background: #2563eb; }
+      .zone-dot.inst-sell { background: #7c3aed; }
+      .zone-dot.inst-neutral { background: #9ca3af; }
+      .zone-legend { font-size: 11px; color: #6b7280; margin-top: 6px; }
+      .zone-narrative {
+        border: 1px dashed #e5e7eb;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #fafafa;
+        margin: 10px 0 14px 0;
+      }
+      .segment-block {
+        padding: 6px 0;
+        border-bottom: 1px dashed #e5e7eb;
+        font-size: 12px;
+      }
+      .segment-block:last-child { border-bottom: none; }
+      .segment-line { color: #111827; font-weight: 600; }
+      .segment-sub { color: #6b7280; font-size: 11px; }
+
+      /* State Machine Panel */
+      .state-panel {
+        margin: 10px 0 14px 0;
+        padding: 16px;
+        border: 2px solid #e5e7eb;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+      }
+      .state-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .state-badge {
+        font-size: 14px;
+        font-weight: 700;
+        padding: 8px 16px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .state-badge.breakdown-risk { background: #fecaca; color: #991b1b; border: 2px solid #ef4444; }
+      .state-badge.weak-defense { background: #fed7aa; color: #9a3412; border: 2px solid #f97316; }
+      .state-badge.defense-only { background: #fef3c7; color: #92400e; border: 2px solid #f59e0b; }
+      .state-badge.distribution { background: #e9d5ff; color: #6b21a8; border: 2px solid #a855f7; }
+      .state-badge.reclaim-developing { background: #d1fae5; color: #065f46; border: 2px solid #10b981; }
+      .state-badge.acceptance { background: #a7f3d0; color: #047857; border: 2px solid #10b981; }
+      .state-badge.break-likely { background: #86efac; color: #166534; border: 2px solid #22c55e; }
+      .state-badge.break-likely-cautious { background: #bbf7d0; color: #166534; border: 2px solid #22c55e; }
+      .state-badge.accumulation-setup { background: #dbeafe; color: #1e40af; border: 2px solid #3b82f6; }
+      .state-badge.defense-accumulating { background: #e0f2fe; color: #0369a1; border: 2px solid #0ea5e9; }
+      .state-badge.acceptance-cautious { background: #d1fae5; color: #065f46; border: 2px solid #10b981; }
+      .state-badge.weak-defense { background: #fed7aa; color: #9a3412; border: 2px solid #f97316; }
+      .state-badge.mixed { background: #e5e7eb; color: #374151; border: 2px solid #9ca3af; }
+      .state-badge.unknown { background: #f3f4f6; color: #6b7280; border: 2px solid #d1d5db; }
+      .action-badge {
+        font-size: 13px;
+        font-weight: 700;
+        padding: 6px 14px;
+        border-radius: 6px;
+      }
+      .action-badge.wait { background: #fef3c7; color: #92400e; }
+      .action-badge.watch { background: #dbeafe; color: #1e40af; }
+      .action-badge.starter { background: #d1fae5; color: #065f46; }
+      .action-badge.add { background: #86efac; color: #166534; }
+      .action-badge.avoid { background: #fecaca; color: #991b1b; }
+      .action-badge.scalp { background: #ddd6fe; color: #5b21b6; }
+      .state-meters {
+        display: flex;
+        gap: 24px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .meter-container {
+        flex: 1;
+        min-width: 200px;
+      }
+      .meter-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #374151;
+        margin-bottom: 4px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .meter-bar {
+        height: 12px;
+        background: #e5e7eb;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .meter-fill {
+        height: 100%;
+        border-radius: 6px;
+        transition: width 0.3s ease;
+      }
+      .meter-fill.ds { background: linear-gradient(90deg, #fbbf24 0%, #22c55e 100%); }
+      .meter-fill.as { background: linear-gradient(90deg, #f97316 0%, #3b82f6 100%); }
+      .meter-fill.low { background: #ef4444; }
+      .meter-fill.medium { background: #f59e0b; }
+      .meter-fill.high { background: #22c55e; }
+      .state-reason {
+        font-size: 12px;
+        color: #6b7280;
+        padding: 8px 12px;
+        background: #fff;
+        border-radius: 6px;
+        border: 1px solid #e5e7eb;
+        margin-top: 8px;
+      }
+      .state-flags {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
+      .state-flag {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .state-flag.warning { background: #fef3c7; color: #92400e; }
+      .state-flag.danger { background: #fecaca; color: #991b1b; }
+      .state-flag.success { background: #d1fae5; color: #065f46; }
+      .state-flag.info { background: #dbeafe; color: #1e40af; }
+
+      .zone-chart {
+        margin: 10px 0 14px 0;
+        padding: 12px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        background: #fafafa;
+      }
+      .zone-chart-container {
+        display: flex;
+        align-items: stretch;
+        min-height: 180px;
+      }
+      .zone-chart-labels {
+        width: 60px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        font-size: 11px;
+        color: #6b7280;
+        font-weight: 600;
+      }
+      .zone-chart-label {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: 8px;
+      }
+      .zone-chart-label.above { color: #059669; }
+      .zone-chart-label.on { color: #d97706; }
+      .zone-chart-label.below { color: #dc2626; }
+      .zone-chart-area {
+        flex: 1;
+        position: relative;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      .zone-chart-inner {
+        position: relative;
+        min-width: 100%;
+        height: 180px;
+        display: flex;
+        align-items: stretch;
+      }
+      .zone-chart-grid {
+        position: absolute;
+        left: 0; right: 0; top: 0; bottom: 0;
+        pointer-events: none;
+      }
+      .zone-chart-line {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 0;
+        border-top: 2px dashed #9ca3af;
+      }
+      .zone-chart-line.support {
+        top: 50%;
+        border-top: 3px solid #d97706;
+        z-index: 5;
+      }
+      .zone-chart-line.above-bound {
+        top: 10%;
+        border-top: 1px dashed #d1d5db;
+      }
+      .zone-chart-line.below-bound {
+        top: 90%;
+        border-top: 1px dashed #d1d5db;
+      }
+      .zone-chart-dots {
+        display: flex;
+        align-items: stretch;
+        gap: 4px;
+        padding: 0 8px;
+        position: relative;
+        z-index: 10;
+      }
+      .zone-dot-col {
+        position: relative;
+        width: 20px;
+        flex: 0 0 20px;
+        height: 180px;
+      }
+      .zone-dot-item {
+        position: absolute;
+        left: 50%;
+        transform: translate(-50%, 50%);
+        border-radius: 999px;
+        cursor: pointer;
+        transition: transform 0.1s;
+        border: none;
+      }
+      .zone-dot-item:hover {
+        transform: translate(-50%, 50%) scale(1.3);
+        z-index: 20;
+      }
+      /* Simple 3-color system: green=buyers, red=sellers, gray=neutral */
+      .zone-dot-item.buy { background: #22c55e; }
+      .zone-dot-item.sell { background: #ef4444; }
+      .zone-dot-item.neutral { background: #d1d5db; }    /* Gray - neutral */
+      .zone-dot-item.inst-buy { background: #3b82f6; }   /* Blue - INST buyers dominated + aligned */
+      .zone-dot-item.inst-sell { background: #ec4899; }  /* Pink - INST sellers dominated + aligned */
+      
+      /* Rectangle = conflict (INST vs overall disagree) */
+      .zone-dot-item.conflict { border-radius: 4px !important; }
+      .zone-chart-legend {
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        justify-content: center;
+      }
+      .zone-chart-legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .legend-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        display: inline-block;
+        box-sizing: border-box;
+      }
+      .zone-chart-price {
+        position: absolute;
+        right: 4px;
+        font-size: 10px;
+        color: #d97706;
+        font-weight: 600;
+        background: rgba(255,255,255,0.9);
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
     </style>
   </head>
   <body>
+    {% if "_LIVE" in session_id %}
+    <div style="position: fixed; top: 0; left: 0; right: 0; background: linear-gradient(90deg, #dc2626, #ef4444); color: white; padding: 8px 16px; font-weight: 600; text-align: center; z-index: 1000; animation: pulse 2s ease-in-out infinite;">
+      🔴 LIVE MODE - Auto-refreshing every 10 seconds | Last update: {{ now|chicago }}
+      <a href="/api/jobs/stop?session_id={{ session_id }}" style="color: white; margin-left: 20px; text-decoration: underline;">[Stop Live]</a>
+    </div>
+    <style>
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.8; }
+      }
+    </style>
+    <div style="height: 50px;"></div> <!-- Spacer for fixed banner -->
+    {% endif %}
     <p><a href="/sessions/{{ date }}/{{ ticker }}/{{ session_id }}">← session</a></p>
     <h2>Session Report</h2>
     <p class="muted">
@@ -623,6 +951,534 @@
           {% endif %}
         {% endfor %}
 
+        <!-- Zone Story -->
+        {% for lv in ch.levels %}
+          {% if lv.zone_analysis and lv.zone_analysis.bounds and lv.zone_analysis.zones %}
+            {% set za = lv.zone_analysis %}
+            <h5 style="margin-top: 16px;">Zone Story</h5>
+            <p class="muted">
+              Support={{ "%.4f"|format(za.bounds.support) }}
+              | ON {{ "%.4f"|format(za.bounds.on_floor) }} - {{ "%.4f"|format(za.bounds.on_ceiling) }}
+              | ABOVE {{ "%.4f"|format(za.bounds.above_floor) }} - {{ "%.4f"|format(za.bounds.above_ceiling) }}
+              | BELOW {{ "%.4f"|format(za.bounds.below_floor) }} - {{ "%.4f"|format(za.bounds.below_ceiling) }}
+            </p>
+
+            <div class="zone-story">
+              {% for z in ["BELOW", "ON", "ABOVE"] %}
+                {% set zs = za.zones[z] %}
+                {% set total = zs.total_volume_sum or 0 %}
+                {% set delta = zs.delta_sum or 0 %}
+                {% set imbalance = ((delta|abs) / total) if total > 0 else 0 %}
+                {% set cls = "neutral" %}
+                {% if delta > 0 %}
+                  {% if imbalance >= 0.35 %}
+                    {% set cls = "buy-strong" %}
+                  {% elif imbalance >= 0.15 %}
+                    {% set cls = "buy-medium" %}
+                  {% endif %}
+                {% elif delta < 0 %}
+                  {% if imbalance >= 0.35 %}
+                    {% set cls = "sell-strong" %}
+                  {% elif imbalance >= 0.15 %}
+                    {% set cls = "sell-medium" %}
+                  {% endif %}
+                {% endif %}
+
+                {% set inst_buy = zs.inst_buy_volume_sum or 0 %}
+                {% set inst_sell = zs.inst_sell_volume_sum or 0 %}
+                {% set inst_cls = "inst-neutral" %}
+                {% if inst_buy > inst_sell * 1.2 %}
+                  {% set inst_cls = "inst-buy" %}
+                {% elif inst_sell > inst_buy * 1.2 %}
+                  {% set inst_cls = "inst-sell" %}
+                {% endif %}
+
+                <div class="zone-row">
+                  <div class="zone-label">{{ z }}</div>
+                  <div class="zone-bar {{ cls }}">
+                    <span class="zone-dot {{ inst_cls }}" title="INST footprint"></span>
+                  </div>
+                  <div class="zone-meta">
+                    {{ "{:+,.0f}".format(delta) }}
+                  </div>
+                </div>
+              {% endfor %}
+              <div class="zone-legend">
+                Green=buying, red=selling, yellow/orange=moderate, blue=neutral.
+                Dot=INST footprint (blue=buy, purple=sell, gray=neutral).
+              </div>
+            </div>
+
+            {# ===== STATE MACHINE PANEL ===== #}
+            {% if lv.market_state %}
+              {% set ms = lv.market_state %}
+              {% set ds = lv.defense_score or {} %}
+              {% set as_ = lv.aggression_score or {} %}
+              {% set dp = lv.distribution_pattern or {} %}
+              
+              {% set state_lower = ms.state|lower|replace("_", "-") %}
+              {% set action_lower = ms.action|lower %}
+              
+              <div class="state-panel">
+                <div class="state-header">
+                  <div>
+                    <span class="state-badge {{ state_lower }}">
+                      {% if ms.state == "BREAKDOWN_RISK" %}🔴
+                      {% elif ms.state == "WEAK_DEFENSE" %}🟠
+                      {% elif ms.state == "DEFENSE_ONLY" %}🟡
+                      {% elif ms.state == "DEFENSE_ACCUMULATING" %}🔵
+                      {% elif ms.state == "ACCUMULATION_SETUP" %}💎
+                      {% elif ms.state == "RECLAIM_DEVELOPING" %}🟢
+                      {% elif ms.state == "ACCEPTANCE" %}💚
+                      {% elif ms.state == "ACCEPTANCE_CAUTIOUS" %}🟢
+                      {% elif ms.state == "BREAK_LIKELY" %}🚀
+                      {% elif ms.state == "BREAK_LIKELY_CAUTIOUS" %}🚀
+                      {% elif ms.state == "DISTRIBUTION" %}⚠️
+                      {% else %}⚪{% endif %}
+                      {{ ms.state|replace("_", " ") }}
+                    </span>
+                  </div>
+                  <div>
+                    <span class="action-badge {{ action_lower }}">
+                      {% if ms.action == "WAIT" %}⏸️
+                      {% elif ms.action == "WATCH" %}👁️
+                      {% elif ms.action == "STARTER" %}🟢
+                      {% elif ms.action == "ADD" %}➕
+                      {% elif ms.action == "AVOID" %}🚫
+                      {% elif ms.action == "SCALP" %}⚡
+                      {% endif %}
+                      {{ ms.action }}
+                    </span>
+                    <span style="margin-left: 8px; font-size: 12px; color: #6b7280;">({{ ms.confidence }}% conf)</span>
+                  </div>
+                </div>
+                
+                <div class="state-meters">
+                  <div class="meter-container">
+                    <div class="meter-label">
+                      <span>🛡️ Defense Score (DS)</span>
+                      <span>{{ ds.pct|default(0) }}%</span>
+                    </div>
+                    <div class="meter-bar">
+                      <div class="meter-fill {% if ds.pct|default(0) >= 65 %}high{% elif ds.pct|default(0) >= 40 %}medium{% else %}low{% endif %}" 
+                           style="width: {{ ds.pct|default(0) }}%;"></div>
+                    </div>
+                  </div>
+                  <div class="meter-container">
+                    <div class="meter-label">
+                      <span>⚔️ Aggression Score (AS)</span>
+                      <span>{{ as_.pct|default(0) }}%</span>
+                    </div>
+                    <div class="meter-bar">
+                      <div class="meter-fill {% if as_.pct|default(0) >= 65 %}high{% elif as_.pct|default(0) >= 40 %}medium{% else %}low{% endif %}" 
+                           style="width: {{ as_.pct|default(0) }}%;"></div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div class="state-reason">
+                  <strong>📊 Analysis:</strong> {{ ms.reason }}
+                </div>
+                
+                <div class="state-flags">
+                  {% if ds.accumulation_detected %}
+                    <span class="state-flag success">
+                      💎 Accumulation Pattern ({{ ds.accumulation_count }} dip-buys)
+                    </span>
+                  {% endif %}
+                  {% if lv.late_momentum and lv.late_momentum.direction in ['BULLISH', 'LEAN_BULLISH'] %}
+                    <span class="state-flag success">
+                      🚀 Late Momentum: {{ lv.late_momentum.direction }} (+{{ lv.late_momentum.score }})
+                    </span>
+                  {% elif lv.late_momentum and lv.late_momentum.direction in ['BEARISH', 'LEAN_BEARISH'] %}
+                    <span class="state-flag danger">
+                      📉 Late Momentum: {{ lv.late_momentum.direction }} ({{ lv.late_momentum.score }})
+                    </span>
+                  {% endif %}
+                  {% if ms.late_momentum and ms.late_momentum.upgrade %}
+                    <span class="state-flag success">
+                      ⬆️ Upgraded by late momentum
+                    </span>
+                  {% elif ms.late_momentum and ms.late_momentum.downgrade %}
+                    <span class="state-flag warning">
+                      ⬇️ Downgraded by late momentum
+                    </span>
+                  {% endif %}
+                  {% if dp.triggered %}
+                    <span class="state-flag {% if dp.severity == 'HIGH' %}danger{% else %}warning{% endif %}">
+                      ⚠️ Distribution Pattern ({{ dp.severity }})
+                    </span>
+                  {% endif %}
+                  {% for r in ds.reasons|default([])|batch(3)|first|default([]) %}
+                    <span class="state-flag {% if 'positive' in r or 'buying' in r or 'accumulating' in r or 'SOAK' in r %}success{% elif 'selling' in r or 'negative' in r %}warning{% else %}info{% endif %}">
+                      {{ r }}
+                    </span>
+                  {% endfor %}
+                  {% for r in as_.reasons|default([])|batch(3)|first|default([]) %}
+                    <span class="state-flag {% if 'positive' in r or 'buying' in r or 'growing' in r or 'pressing' in r %}success{% elif 'selling' in r or 'fading' in r %}warning{% else %}info{% endif %}">
+                      {{ r }}
+                    </span>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+
+            {% if lv.zone_segments and lv.zone_segments|length > 0 %}
+              {% set segs = lv.zone_segments %}
+              {% set min_v = segs|map(attribute="total_vol")|select|min %}
+              {% set max_v = segs|map(attribute="total_vol")|select|max %}
+              {% set support_price = lv.level_price|default(0) %}
+              {% set above_ceil = lv.zone_analysis.above_ceiling|default(support_price * 1.02) if lv.zone_analysis else support_price * 1.02 %}
+              {% set below_floor = lv.zone_analysis.below_floor|default(support_price * 0.97) if lv.zone_analysis else support_price * 0.97 %}
+
+              <div class="zone-chart">
+                <div class="zone-chart-container">
+                  <div class="zone-chart-labels">
+                    <div class="zone-chart-label above">ABOVE<br><small>${{ "%.2f"|format(above_ceil) }}</small></div>
+                    <div class="zone-chart-label on">ON<br><small>${{ "%.2f"|format(support_price) }}</small></div>
+                    <div class="zone-chart-label below">BELOW<br><small>${{ "%.2f"|format(below_floor) }}</small></div>
+                  </div>
+                  <div class="zone-chart-area">
+                    <div class="zone-chart-inner">
+                      <div class="zone-chart-grid">
+                        <div class="zone-chart-line above-bound"></div>
+                        <div class="zone-chart-line support">
+                          <span class="zone-chart-price" style="top: -8px;">${{ "%.4f"|format(support_price) }}</span>
+                        </div>
+                        <div class="zone-chart-line below-bound"></div>
+                      </div>
+                      <div class="zone-chart-dots">
+                        {% for seg in segs %}
+                          {% set total = seg.total_vol or 0 %}
+                          {% set delta = seg.delta or 0 %}
+                          
+                          {# 6-STATE CLASSIFICATION:
+                             - Green Circle: Retail buyers won
+                             - Blue Circle: INST buyers dominated + buyers won (aligned)
+                             - Red Circle: Retail sellers won
+                             - Pink Circle: INST sellers dominated + sellers won (aligned)
+                             - Green Rectangle: Buyers won BUT INST was selling (conflict/distribution)
+                             - Red Rectangle: Sellers won BUT INST was buying (conflict/absorption)
+                          #}
+                          {% set inst_buy = seg.inst_buy or 0 %}
+                          {% set inst_sell = seg.inst_sell or 0 %}
+                          {% set buyers_won = delta > 0 and total > 0 and (delta / total) > 0.05 %}
+                          {% set sellers_won = delta < 0 and total > 0 and ((-delta) / total) > 0.05 %}
+                          {% set inst_buy_significant = inst_buy > 5000 %}
+                          {% set inst_sell_significant = inst_sell > 5000 %}
+                          {% set inst_buy_dominant = inst_buy > inst_sell * 1.3 and inst_buy_significant %}
+                          {% set inst_sell_dominant = inst_sell > inst_buy * 1.3 and inst_sell_significant %}
+                          
+                          {% set cls = "neutral" %}
+                          {% set is_conflict = false %}
+                          
+                          {% if buyers_won %}
+                            {% if inst_sell_dominant %}
+                              {# Conflict: buyers won but INST was selling #}
+                              {% set cls = "buy" %}
+                              {% set is_conflict = true %}
+                            {% elif inst_buy_dominant %}
+                              {# Aligned: INST buyers dominated + overall buyers won = Blue #}
+                              {% set cls = "inst-buy" %}
+                            {% else %}
+                              {# Retail buyers won #}
+                              {% set cls = "buy" %}
+                            {% endif %}
+                          {% elif sellers_won %}
+                            {% if inst_buy_dominant %}
+                              {# Conflict: sellers won but INST was buying (ABSORPTION!) #}
+                              {% set cls = "sell" %}
+                              {% set is_conflict = true %}
+                            {% elif inst_sell_dominant %}
+                              {# Aligned: INST sellers dominated + overall sellers won = Pink #}
+                              {% set cls = "inst-sell" %}
+                            {% else %}
+                              {# Retail sellers won #}
+                              {% set cls = "sell" %}
+                            {% endif %}
+                          {% endif %}
+                          
+                          {% set conflict_cls = "conflict" if is_conflict else "" %}
+
+                          {# Size: min 12px, max 28px based on volume #}
+                          {% set size = 12 %}
+                          {% if max_v and min_v and max_v > min_v %}
+                            {% set size = 12 + ((total - min_v) / (max_v - min_v)) * 16 %}
+                          {% endif %}
+
+                          {# Y position based on ZONE - 180px height, support at 50% #}
+                          {# ABOVE: 5%-45% (top section), ON: 45%-55% (middle), BELOW: 55%-95% (bottom) #}
+                          {% set zone = seg.zone|default("ON") %}
+                          {# Use display_price (Winner's Price) for positioning, fall back to end_price #}
+                          {% set display_price = seg.display_price or seg.end_price or support_price %}
+                          {% set y_pct = 50 %}
+                          {% if zone == "OUT" %}
+                            {# OUT can be above or below - check actual price #}
+                            {% if display_price >= support_price %}
+                              {% set y_pct = 5 %}
+                            {% else %}
+                              {% set y_pct = 95 %}
+                            {% endif %}
+                          {% elif zone == "ABOVE" %}
+                            {% if above_ceil > support_price %}
+                              {% set zone_pct = (display_price - support_price) / (above_ceil - support_price) %}
+                              {% set zone_pct = [0, [1, zone_pct]|min]|max %}
+                              {% set y_pct = 45 - (zone_pct * 35) %}
+                            {% else %}
+                              {% set y_pct = 25 %}
+                            {% endif %}
+                          {% elif zone == "ON" %}
+                            {% set y_pct = 50 %}
+                          {% elif zone == "BELOW" %}
+                            {% if support_price > below_floor %}
+                              {% set zone_pct = (support_price - display_price) / (support_price - below_floor) %}
+                              {% set zone_pct = [0, [1, zone_pct]|min]|max %}
+                              {% set y_pct = 55 + (zone_pct * 35) %}
+                            {% else %}
+                              {% set y_pct = 75 %}
+                            {% endif %}
+                          {% endif %}
+
+
+                          {% set price_fmt = "%.4f"|format(display_price) %}
+                          {% set delta_fmt = "{:+,.0f}".format(delta) %}
+                          {% set buy_fmt = "{:,.0f}".format(seg.buy_vol or 0) %}
+                          {% set sell_fmt = "{:,.0f}".format(seg.sell_vol or 0) %}
+                          {% set inst_buy_fmt = "{:,.0f}".format(inst_buy) %}
+                          {% set inst_sell_fmt = "{:,.0f}".format(inst_sell) %}
+                          <div class="zone-dot-col">
+                            <div class="zone-dot-item {{ cls }} {{ conflict_cls }}"
+                                 title="{{ seg.start_ts_ms|chicago }} | {{ zone }} | ${{ price_fmt }} | delta={{ delta_fmt }} | buy={{ buy_fmt }} | sell={{ sell_fmt }} | inst={{ inst_buy_fmt }}B/{{ inst_sell_fmt }}S"
+                                 style="width: {{ "%.0f"|format(size) }}px; height: {{ "%.0f"|format(size) }}px; top: {{ "%.1f"|format(y_pct) }}%;">
+                            </div>
+                          </div>
+                        {% endfor %}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="zone-chart-legend">
+                  <span><span class="legend-dot" style="background:#22c55e;"></span> Buyers</span>
+                  <span><span class="legend-dot" style="background:#ef4444;"></span> Sellers</span>
+                  <span><span class="legend-dot" style="background:#d1d5db;"></span> Even</span>
+                  <span><span class="legend-dot" style="background:#3b82f6;"></span> INST Buy+Win</span>
+                  <span><span class="legend-dot" style="background:#ec4899;"></span> INST Sell+Win</span>
+                  <span><span class="legend-dot" style="background:#22c55e; border-radius:3px;"></span> Conflict</span>
+                  <span>⬤ Size = volume</span>
+                </div>
+              </div>
+
+              <div class="zone-narrative">
+                {% for seg in lv.zone_segments %}
+                  {% set dur_min = (seg.duration_s or 0) / 60 %}
+                  <div class="segment-block">
+                    <div class="segment-line">
+                      {{ seg.start_ts_ms|chicago }} -> $
+                      {% if seg.end_price is not none %}{{ "%.4f"|format(seg.end_price) }}{% else %}?{% endif %}
+                      ({{ seg.zone }}) from $
+                      {% if seg.start_price is not none %}{{ "%.4f"|format(seg.start_price) }}{% else %}?{% endif %}
+                    </div>
+                    <div class="segment-sub">
+                      Low: {% if seg.low is not none %}${{ "%.4f"|format(seg.low) }}{% else %}?{% endif %}
+                      | High: {% if seg.high is not none %}${{ "%.4f"|format(seg.high) }}{% else %}?{% endif %}
+                    </div>
+                    <div class="segment-sub">
+                      Spent {{ "%.2f"|format(dur_min) }}m | buy={{ "{:,.0f}".format(seg.buy_vol) }}
+                      sell={{ "{:,.0f}".format(seg.sell_vol) }} delta={{ "{:+,.0f}".format(seg.delta) }}
+                      | INST: {{ "{:,.0f}".format(seg.inst_buy) }}B / {{ "{:,.0f}".format(seg.inst_sell) }}S
+                    </div>
+                    {% if seg.annotations and seg.annotations|length > 0 %}
+                      <div class="segment-sub">
+                        Notes: {{ seg.annotations|join(" | ") }}
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              </div>
+            {% endif %}
+
+            {% if lv.zone_signals %}
+              <h5 style="margin-top: 10px;">Additional Signals</h5>
+              <table>
+                <thead>
+                  <tr>
+                    <th>signal</th>
+                    <th>value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>INST timing</td><td>{{ lv.zone_signals.inst_timing }}</td></tr>
+                  <tr><td>Volume trend BELOW</td><td>{{ lv.zone_signals.volume_trend.BELOW }}</td></tr>
+                  <tr><td>Volume trend ON</td><td>{{ lv.zone_signals.volume_trend.ON }}</td></tr>
+                  <tr><td>Volume trend ABOVE</td><td>{{ lv.zone_signals.volume_trend.ABOVE }}</td></tr>
+                  <tr><td>Price velocity</td><td>{{ lv.zone_signals.price_velocity }}</td></tr>
+                  <tr><td>Repeat tests (BELOW)</td><td>{{ lv.zone_signals.repeat_tests.count }} ({{ lv.zone_signals.repeat_tests.trend }})</td></tr>
+                  <tr><td>Time of day</td><td>{{ lv.zone_signals.time_of_day }}</td></tr>
+                  <tr><td>Delta acceleration</td><td>{{ lv.zone_signals.delta_acceleration }}</td></tr>
+                  <tr><td>Trade size trend</td><td>{{ lv.zone_signals.trade_size_trend }}</td></tr>
+                </tbody>
+              </table>
+            {% endif %}
+
+            {% if lv.risk_reward %}
+              <h5 style="margin-top: 10px;">Risk/Reward Context</h5>
+              <table>
+                <thead>
+                  <tr>
+                    <th>stop</th>
+                    <th>target</th>
+                    <th>risk</th>
+                    <th>reward</th>
+                    <th>R:R</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>{% if lv.risk_reward.stop_level is not none %}${{ "%.4f"|format(lv.risk_reward.stop_level) }}{% else %}n/a{% endif %}</td>
+                    <td>{% if lv.risk_reward.target is not none %}${{ "%.4f"|format(lv.risk_reward.target) }}{% else %}n/a{% endif %}</td>
+                    <td>{% if lv.risk_reward.risk is not none %}{{ "%.4f"|format(lv.risk_reward.risk) }}{% else %}n/a{% endif %}</td>
+                    <td>{% if lv.risk_reward.reward is not none %}{{ "%.4f"|format(lv.risk_reward.reward) }}{% else %}n/a{% endif %}</td>
+                    <td>{% if lv.risk_reward.rr is not none %}{{ "%.2f"|format(lv.risk_reward.rr) }}{% else %}n/a{% endif %}</td>
+                  </tr>
+                </tbody>
+              </table>
+            {% endif %}
+
+            {% if lv.zone_verdict %}
+              <h5 style="margin-top: 10px;">Final Verdict</h5>
+              <p class="muted"><b>{{ lv.zone_verdict.confidence }}</b>{% if lv.zone_verdict.reasons %} - {{ lv.zone_verdict.reasons|join("; ") }}{% endif %}</p>
+              {% if lv.zone_verdict.rr_suggestion %}
+                <p class="muted">
+                  Suggested tighter stop: ${{ "%.4f"|format(lv.zone_verdict.rr_suggestion.suggested_stop) }}
+                  (R:R {{ lv.zone_verdict.rr_suggestion.desired_rr }})
+                </p>
+              {% endif %}
+            {% endif %}
+
+            {% if lv.role_behavior %}
+              <h5 style="margin-top: 10px;">Role Behavior</h5>
+              <p class="muted">
+                Acts like: <b>{{ lv.role_behavior.role }}</b>
+                (confidence: {{ lv.role_behavior.confidence }})
+                | support={{ lv.role_behavior.support_score }}
+                resistance={{ lv.role_behavior.resistance_score }}
+                {% if lv.role_behavior.mismatch %}
+                  | <b style="color:#f85149;">mismatch vs selected level</b>
+                {% endif %}
+              </p>
+              {% if lv.role_behavior.support_reasons and lv.role_behavior.support_reasons|length > 0 %}
+                <p class="muted">support signals: {{ lv.role_behavior.support_reasons|join(", ") }}</p>
+              {% endif %}
+              {% if lv.role_behavior.resistance_reasons and lv.role_behavior.resistance_reasons|length > 0 %}
+                <p class="muted">resistance signals: {{ lv.role_behavior.resistance_reasons|join(", ") }}</p>
+              {% endif %}
+            {% endif %}
+
+            {% if lv.trade_trigger %}
+              <p class="muted"><b>Trade Trigger:</b> {{ lv.trade_trigger }}</p>
+            {% endif %}
+
+            <table>
+              <thead>
+                <tr>
+                  <th>zone</th>
+                  <th>time_s</th>
+                  <th>buy</th>
+                  <th>sell</th>
+                  <th>delta</th>
+                  <th>inst_buy</th>
+                  <th>inst_sell</th>
+                  <th>inst_trades</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for z in ["BELOW", "ON", "ABOVE", "OUT"] %}
+                  {% set zs = za.zones[z] %}
+                  <tr>
+                    <td><code>{{ z }}</code></td>
+                    <td>{{ zs.duration_s }}</td>
+                    <td>{{ "{:,.0f}".format(zs.buy_volume_sum) }}</td>
+                    <td>{{ "{:,.0f}".format(zs.sell_volume_sum) }}</td>
+                    <td>{{ "{:,.0f}".format(zs.delta_sum) }}</td>
+                    <td>{{ "{:,.0f}".format(zs.inst_buy_volume_sum) }}</td>
+                    <td>{{ "{:,.0f}".format(zs.inst_sell_volume_sum) }}</td>
+                    <td>{{ "{:,.0f}".format(zs.inst_trade_count_sum) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+
+            <p class="muted">
+              BELOW inst buy ratio:
+              {% if za.below_inst_buy_ratio is not none %}
+                {{ "%.0f"|format(za.below_inst_buy_ratio * 100) }}%
+              {% else %}
+                n/a
+              {% endif %}
+              | transitions={{ za.transitions }}
+            </p>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>velocity</th>
+                  <th>below->on (s)</th>
+                  <th>on->above (s)</th>
+                  <th>below->above (s)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>first sequence</td>
+                  <td>{% if za.velocity.time_below_to_on_s is not none %}{{ "%.1f"|format(za.velocity.time_below_to_on_s) }}{% else %}n/a{% endif %}</td>
+                  <td>{% if za.velocity.time_on_to_above_s is not none %}{{ "%.1f"|format(za.velocity.time_on_to_above_s) }}{% else %}n/a{% endif %}</td>
+                  <td>{% if za.velocity.time_below_to_above_s is not none %}{{ "%.1f"|format(za.velocity.time_below_to_above_s) }}{% else %}n/a{% endif %}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <p class="muted">
+              SOAK:
+              {% if za.soak.confirmed %}
+                <b>confirmed</b> (time_to_recover={{ "%.1f"|format(za.soak.time_to_recover_s) }}s)
+              {% else %}
+                not confirmed
+              {% endif %}
+            </p>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>window</th>
+                  <th>winner</th>
+                  <th>buy</th>
+                  <th>sell</th>
+                  <th>delta</th>
+                  <th>inst_buy</th>
+                  <th>inst_sell</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for key, lm in za.last_minutes.items() %}
+                  <tr>
+                    <td><code>{{ key }}</code></td>
+                    {% if lm.error %}
+                      <td colspan="6" class="muted">{{ lm.error }}</td>
+                    {% else %}
+                      <td>{{ lm.winner }}</td>
+                      <td>{{ "{:,.0f}".format(lm.buy_vol) }}</td>
+                      <td>{{ "{:,.0f}".format(lm.sell_vol) }}</td>
+                      <td>{{ "{:,.0f}".format(lm.delta) }}</td>
+                      <td>{{ "{:,.0f}".format(lm.inst_buy_vol) }}</td>
+                      <td>{{ "{:,.0f}".format(lm.inst_sell_vol) }}</td>
+                    {% endif %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+        {% endfor %}
+
         <!-- Top Bounces per Level -->
         {% for lv in ch.levels %}
           {% if lv.level_stats and lv.level_stats.get('top_bounces') and lv.level_stats.get('top_bounces')|length > 0 %}
@@ -1050,5 +1906,4 @@
     {% endif %}
   </body>
 </html>
-
 

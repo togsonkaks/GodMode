@@ -1,0 +1,1390 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>🔴 Live Dashboard</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { 
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; 
+        margin: 0; padding: 20px; 
+        background: #f8fafc;
+      }
+      
+      /* Header */
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        padding: 16px 20px;
+        background: linear-gradient(90deg, #1e293b, #334155);
+        border-radius: 12px;
+        color: white;
+      }
+      .header h1 { margin: 0; font-size: 24px; }
+      .header .status { 
+        display: flex; align-items: center; gap: 8px;
+        font-size: 14px; color: #94a3b8;
+      }
+      .header .status .dot {
+        width: 10px; height: 10px; border-radius: 50%;
+        background: #22c55e;
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+
+      /* Add Ticker Panel */
+      .add-panel {
+        background: white;
+        border: 2px dashed #cbd5e1;
+        border-radius: 12px;
+        padding: 24px;
+        margin-bottom: 20px;
+        text-align: center;
+      }
+      .add-panel.collapsed {
+        padding: 12px;
+        cursor: pointer;
+      }
+      .add-panel.collapsed:hover {
+        border-color: #3b82f6;
+        background: #f8fafc;
+      }
+      .add-form {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+      .add-form input {
+        padding: 10px 14px;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        font-size: 14px;
+        width: 120px;
+      }
+      .add-form input:focus {
+        outline: none;
+        border-color: #3b82f6;
+      }
+      .add-form input.ticker-input {
+        text-transform: uppercase;
+        font-weight: 600;
+      }
+      .add-form button {
+        padding: 10px 20px;
+        background: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .add-form button:hover { background: #2563eb; }
+
+      /* Time Slider */
+      .time-control {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 16px 20px;
+        margin-bottom: 20px;
+      }
+      .time-control-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .time-control-header span { font-size: 13px; color: #64748b; }
+      .time-display {
+        font-size: 14px;
+        font-weight: 600;
+        color: #1e293b;
+      }
+      .slider-container {
+        position: relative;
+        height: 40px;
+        margin: 0 10px;
+      }
+      .slider-track {
+        position: absolute;
+        top: 50%;
+        left: 0;
+        right: 0;
+        height: 8px;
+        background: #e2e8f0;
+        border-radius: 4px;
+        transform: translateY(-50%);
+      }
+      .slider-range {
+        position: absolute;
+        top: 50%;
+        height: 8px;
+        background: #3b82f6;
+        border-radius: 4px;
+        transform: translateY(-50%);
+        cursor: grab;
+      }
+      .slider-range:active { cursor: grabbing; }
+      .slider-handle {
+        position: absolute;
+        top: 50%;
+        width: 20px;
+        height: 20px;
+        background: white;
+        border: 3px solid #3b82f6;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        cursor: ew-resize;
+        z-index: 10;
+      }
+      .slider-handle:hover { transform: translate(-50%, -50%) scale(1.1); }
+      .slider-labels {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 8px;
+        font-size: 11px;
+        color: #94a3b8;
+      }
+
+      /* Ticker Cards - 2 column grid */
+      .ticker-cards {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 20px;
+      }
+      .ticker-card {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .ticker-card.maximized {
+        grid-column: 1 / -1; /* Span full width */
+      }
+      @media (max-width: 1200px) {
+        .ticker-cards {
+          grid-template-columns: 1fr; /* Single column on smaller screens */
+        }
+      }
+      .ticker-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+      }
+      .ticker-card-header .ticker-name {
+        font-size: 18px;
+        font-weight: 700;
+        color: #1e293b;
+      }
+      .ticker-card-header .ticker-level {
+        font-size: 13px;
+        color: #64748b;
+      }
+      .ticker-card-header .remove-btn {
+        background: none;
+        border: none;
+        color: #94a3b8;
+        cursor: pointer;
+        font-size: 18px;
+        padding: 4px 8px;
+      }
+      .ticker-card-header .remove-btn:hover { color: #ef4444; }
+      .ticker-card-header .ema-indicator {
+        font-size: 16px;
+        cursor: help;
+      }
+      .ticker-card-header .add-level-btn {
+        background: #e2e8f0;
+        border: none;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        font-size: 14px;
+        font-weight: bold;
+        color: #64748b;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .ticker-card-header .add-level-btn:hover {
+        background: #3b82f6;
+        color: white;
+      }
+      .ticker-card-header .maximize-btn {
+        background: #e2e8f0;
+        border: none;
+        border-radius: 4px;
+        width: 24px;
+        height: 24px;
+        font-size: 12px;
+        color: #64748b;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 8px;
+      }
+      .ticker-card-header .maximize-btn:hover {
+        background: #3b82f6;
+        color: white;
+      }
+      .ticker-card.maximized .maximize-btn {
+        background: #3b82f6;
+        color: white;
+      }
+      .ticker-card-body {
+        padding: 16px;
+      }
+      .ticker-loading {
+        text-align: center;
+        padding: 40px;
+        color: #94a3b8;
+      }
+
+      /* Empty State */
+      .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: #64748b;
+      }
+      .empty-state h2 { margin: 0 0 8px 0; color: #1e293b; }
+      .empty-state p { margin: 0; }
+
+      /* EXACT COPY from report.html - State Panel */
+      .state-panel {
+        margin: 10px 0 14px 0;
+        padding: 16px;
+        border: 2px solid #e5e7eb;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+      }
+      .state-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .state-badge {
+        font-size: 14px;
+        font-weight: 700;
+        padding: 8px 16px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .state-badge.breakdown-risk { background: #fecaca; color: #991b1b; border: 2px solid #ef4444; }
+      .state-badge.weak-defense { background: #fed7aa; color: #9a3412; border: 2px solid #f97316; }
+      .state-badge.defense-only { background: #fef3c7; color: #92400e; border: 2px solid #f59e0b; }
+      .state-badge.distribution { background: #e9d5ff; color: #6b21a8; border: 2px solid #a855f7; }
+      .state-badge.reclaim-developing { background: #d1fae5; color: #065f46; border: 2px solid #10b981; }
+      .state-badge.acceptance { background: #a7f3d0; color: #047857; border: 2px solid #10b981; }
+      .state-badge.break-likely { background: #86efac; color: #166534; border: 2px solid #22c55e; }
+      .state-badge.break-likely-cautious { background: #bbf7d0; color: #166534; border: 2px solid #22c55e; }
+      .state-badge.accumulation-setup { background: #dbeafe; color: #1e40af; border: 2px solid #3b82f6; }
+      .state-badge.defense-accumulating { background: #e0f2fe; color: #0369a1; border: 2px solid #0ea5e9; }
+      .state-badge.acceptance-cautious { background: #d1fae5; color: #065f46; border: 2px solid #10b981; }
+      .state-badge.mixed { background: #e5e7eb; color: #374151; border: 2px solid #9ca3af; }
+      .state-badge.unknown { background: #f3f4f6; color: #6b7280; border: 2px solid #d1d5db; }
+      .action-badge {
+        font-size: 13px;
+        font-weight: 700;
+        padding: 6px 14px;
+        border-radius: 6px;
+      }
+      .action-badge.wait { background: #fef3c7; color: #92400e; }
+      .action-badge.watch { background: #dbeafe; color: #1e40af; }
+      .action-badge.starter { background: #d1fae5; color: #065f46; }
+      .action-badge.add { background: #86efac; color: #166534; }
+      .action-badge.avoid { background: #fecaca; color: #991b1b; }
+      .action-badge.scalp { background: #ddd6fe; color: #5b21b6; }
+      .state-meters {
+        display: flex;
+        gap: 24px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .meter-container {
+        flex: 1;
+        min-width: 200px;
+      }
+      .meter-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #374151;
+        margin-bottom: 4px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .meter-bar {
+        height: 12px;
+        background: #e5e7eb;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .meter-fill {
+        height: 100%;
+        border-radius: 6px;
+        transition: width 0.3s ease;
+      }
+      .meter-fill.low { background: #ef4444; }
+      .meter-fill.medium { background: #f59e0b; }
+      .meter-fill.high { background: #22c55e; }
+      .state-reason {
+        font-size: 12px;
+        color: #6b7280;
+        padding: 8px 12px;
+        background: #fff;
+        border-radius: 6px;
+        border: 1px solid #e5e7eb;
+        margin-top: 8px;
+      }
+      .state-flags {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
+      .state-flag {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .state-flag.warning { background: #fef3c7; color: #92400e; }
+      .state-flag.danger { background: #fecaca; color: #991b1b; }
+      .state-flag.success { background: #d1fae5; color: #065f46; }
+      .state-flag.info { background: #dbeafe; color: #1e40af; }
+
+      /* EXACT COPY from report.html - Zone Chart */
+      .zone-chart {
+        margin: 10px 0 14px 0;
+        padding: 12px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        background: #fafafa;
+      }
+      .zone-chart-container {
+        display: flex;
+        align-items: stretch;
+        min-height: 180px;
+      }
+      .zone-chart-labels {
+        width: 60px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        font-size: 11px;
+        color: #6b7280;
+        font-weight: 600;
+      }
+      .zone-chart-label {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: 8px;
+      }
+      .zone-chart-label.above { color: #059669; }
+      .zone-chart-label.on { color: #d97706; }
+      .zone-chart-label.below { color: #dc2626; }
+      .zone-chart-area {
+        flex: 1;
+        position: relative;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        overflow-x: auto;
+        overflow-y: visible;  /* Changed from hidden to allow page scroll from this area */
+      }
+      .zone-chart-inner {
+        position: relative;
+        min-width: 100%;
+        width: fit-content;
+        height: 180px;
+        display: flex;
+        align-items: stretch;
+      }
+      .zone-chart-grid {
+        position: absolute;
+        left: 0; right: 0; top: 0; bottom: 0;
+        pointer-events: none;
+      }
+      .zone-chart-level-line {
+        pointer-events: auto;
+        cursor: pointer;
+      }
+      .zone-chart-line {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 0;
+        border-top: 2px dashed #9ca3af;
+      }
+      .zone-chart-line.support {
+        top: 50%;
+        border-top: 3px solid #d97706;
+        z-index: 5;
+      }
+      .zone-chart-line.above-bound {
+        top: 10%;
+        border-top: 1px dashed #d1d5db;
+      }
+      .zone-chart-line.below-bound {
+        top: 90%;
+        border-top: 1px dashed #d1d5db;
+      }
+      .zone-chart-dots {
+        display: flex;
+        align-items: stretch;
+        gap: 4px;
+        padding: 0 8px;
+        position: relative;
+        z-index: 10;
+      }
+      .zone-dot-col {
+        position: relative;
+        width: 20px;
+        flex: 0 0 20px;
+        height: 180px;
+      }
+      .zone-dot-item {
+        position: absolute;
+        left: 50%;
+        transform: translate(-50%, -50%);  /* Center the dot at the calculated position */
+        border-radius: 999px;
+        cursor: pointer;
+        transition: transform 0.1s;
+        border: none;
+      }
+      .zone-dot-item:hover {
+        transform: translate(-50%, -50%) scale(1.3);
+        z-index: 20;
+      }
+      /* Colors based on who won */
+      .zone-dot-item.buy { background: #22c55e; }        /* Green - retail buyers won */
+      .zone-dot-item.sell { background: #ef4444; }       /* Red - retail sellers won */
+      .zone-dot-item.neutral { background: #d1d5db; }    /* Gray - neutral */
+      .zone-dot-item.inst-buy { background: #3b82f6; }   /* Blue - INST buyers dominated + aligned */
+      .zone-dot-item.inst-sell { background: #ec4899; }  /* Pink - INST sellers dominated + aligned */
+      
+      /* Rectangle = conflict (INST vs overall disagree) */
+      .zone-dot-item.conflict { border-radius: 4px !important; }
+      .zone-chart-legend {
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        justify-content: center;
+      }
+      .zone-chart-legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .legend-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        display: inline-block;
+        box-sizing: border-box;
+      }
+      .zone-chart-price {
+        position: absolute;
+        right: 4px;
+        font-size: 10px;
+        color: #d97706;
+        font-weight: 600;
+        background: rgba(255,255,255,0.9);
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>🔴 Live Dashboard</h1>
+      <div class="status">
+        <div class="dot"></div>
+        <span id="refresh-status">Refreshing every 10s</span>
+      </div>
+    </div>
+
+    <!-- Time Control -->
+    <div class="time-control">
+      <div class="time-control-header">
+        <span id="active-ticker-label" style="font-weight: 600; color: #3b82f6;">No ticker selected</span>
+        <div class="time-display">
+          <span id="time-start">--:--</span> — <span id="time-end">--:--</span>
+          (<span id="time-duration">0</span> min)
+        </div>
+      </div>
+      <div class="slider-container" id="slider-container">
+        <div class="slider-track"></div>
+        <div class="slider-range" id="slider-range"></div>
+        <div class="slider-handle" id="handle-start"></div>
+        <div class="slider-handle" id="handle-end"></div>
+      </div>
+      <div class="slider-labels">
+        <span>00:00</span>
+        <span>06:00</span>
+        <span>12:00</span>
+        <span>18:00</span>
+        <span>Now</span>
+      </div>
+    </div>
+
+    <!-- Add Ticker Panel -->
+    <div class="add-panel" id="add-panel">
+      <div class="add-form" id="add-form">
+        <input type="text" id="input-ticker" class="ticker-input" placeholder="TICKER" maxlength="5">
+        <input type="text" id="input-level" placeholder="Support $" style="width: 100px;">
+        <button onclick="addTicker()">+ Add Ticker</button>
+      </div>
+    </div>
+
+    <!-- Ticker Cards -->
+    <div class="ticker-cards" id="ticker-cards">
+      <!-- Cards will be added here -->
+    </div>
+
+    <!-- Empty State (shown when no tickers) -->
+    <div class="empty-state" id="empty-state">
+      <h2>No tickers added</h2>
+      <p>Add a ticker above to start monitoring</p>
+    </div>
+
+    <script>
+      // ============ STATE ============
+      const tickers = []; // { ticker, level, data, startMs, endMs }
+      let activeTicker = null; // Currently selected ticker
+      let refreshInterval = null;
+
+      // Day boundaries (midnight to now)
+      // Show last 24 hours instead of just today (allows viewing market hours even after midnight)
+      let dayEndMs = Date.now();
+      let dayStartMs = dayEndMs - 24 * 60 * 60 * 1000; // 24 hours ago
+      
+      // Helper to get current time range (from active ticker or default)
+      function getTimeRange() {
+        if (activeTicker) {
+          const t = tickers.find(x => x.id === activeTicker);
+          if (t) return { startMs: t.startMs, endMs: t.endMs };
+        }
+        return { startMs: Date.now() - 5 * 60 * 1000, endMs: Date.now() };
+      }
+      
+      function setTimeRange(startMs, endMs) {
+        if (activeTicker) {
+          const t = tickers.find(x => x.id === activeTicker);
+          if (t) {
+            t.startMs = startMs;
+            t.endMs = endMs;
+          }
+        }
+      }
+
+      // ============ TIME SLIDER ============
+      const sliderContainer = document.getElementById('slider-container');
+      const sliderRange = document.getElementById('slider-range');
+      const handleStart = document.getElementById('handle-start');
+      const handleEnd = document.getElementById('handle-end');
+
+      let dragging = null; // 'start', 'end', 'range'
+      let dragStartX = 0;
+      let dragStartTimeStart = 0;
+      let dragStartTimeEnd = 0;
+
+      function msToPercent(ms) {
+        return ((ms - dayStartMs) / (dayEndMs - dayStartMs)) * 100;
+      }
+
+      function percentToMs(pct) {
+        return dayStartMs + (pct / 100) * (dayEndMs - dayStartMs);
+      }
+
+      function updateSliderUI() {
+        const { startMs, endMs } = getTimeRange();
+        const startPct = msToPercent(startMs);
+        const endPct = msToPercent(endMs);
+        
+        sliderRange.style.left = startPct + '%';
+        sliderRange.style.width = (endPct - startPct) + '%';
+        handleStart.style.left = startPct + '%';
+        handleEnd.style.left = endPct + '%';
+
+        // Update time display
+        document.getElementById('time-start').textContent = formatTime(startMs);
+        document.getElementById('time-end').textContent = formatTime(endMs);
+        document.getElementById('time-duration').textContent = Math.round((endMs - startMs) / 60000);
+        
+        // Show which ticker is active
+        const activeT = activeTicker ? tickers.find(x => x.id === activeTicker) : null;
+        const activeLabel = activeT ? `📍 ${activeT.ticker} @ $${activeT.activeLevel.toFixed(4)}` : 'No ticker selected';
+        document.getElementById('active-ticker-label').textContent = activeLabel;
+      }
+
+      function formatTime(ms) {
+        const d = new Date(ms);
+        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+
+      function getMousePct(e) {
+        const rect = sliderContainer.getBoundingClientRect();
+        return Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+      }
+
+      handleStart.addEventListener('mousedown', (e) => {
+        if (!activeTicker) return;
+        const { startMs } = getTimeRange();
+        dragging = 'start';
+        dragStartX = e.clientX;
+        dragStartTimeStart = startMs;
+        e.preventDefault();
+      });
+
+      handleEnd.addEventListener('mousedown', (e) => {
+        if (!activeTicker) return;
+        const { endMs } = getTimeRange();
+        dragging = 'end';
+        dragStartX = e.clientX;
+        dragStartTimeEnd = endMs;
+        e.preventDefault();
+      });
+
+      sliderRange.addEventListener('mousedown', (e) => {
+        if (!activeTicker) return;
+        if (e.target === handleStart || e.target === handleEnd) return;
+        const { startMs, endMs } = getTimeRange();
+        dragging = 'range';
+        dragStartX = e.clientX;
+        dragStartTimeStart = startMs;
+        dragStartTimeEnd = endMs;
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        if (!dragging || !activeTicker) return;
+        
+        const pct = getMousePct(e);
+        const ms = percentToMs(pct);
+        let { startMs, endMs } = getTimeRange();
+        
+        if (dragging === 'start') {
+          startMs = Math.min(ms, endMs - 60000); // Min 1 min range
+          startMs = Math.max(dayStartMs, startMs);
+        } else if (dragging === 'end') {
+          endMs = Math.max(ms, startMs + 60000);
+          endMs = Math.min(dayEndMs, endMs);
+        } else if (dragging === 'range') {
+          const rect = sliderContainer.getBoundingClientRect();
+          const deltaX = e.clientX - dragStartX;
+          const deltaPct = (deltaX / rect.width) * 100;
+          const deltaMs = (deltaPct / 100) * (dayEndMs - dayStartMs);
+          
+          let newStart = dragStartTimeStart + deltaMs;
+          let newEnd = dragStartTimeEnd + deltaMs;
+          
+          // Clamp to day bounds
+          if (newStart < dayStartMs) {
+            newEnd += (dayStartMs - newStart);
+            newStart = dayStartMs;
+          }
+          if (newEnd > dayEndMs) {
+            newStart -= (newEnd - dayEndMs);
+            newEnd = dayEndMs;
+          }
+          
+          startMs = Math.max(dayStartMs, newStart);
+          endMs = Math.min(dayEndMs, newEnd);
+        }
+        
+        setTimeRange(startMs, endMs);
+        updateSliderUI();
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (dragging && activeTicker) {
+          dragging = null;
+          // Trigger refresh for the active ticker only
+          const t = tickers.find(x => x.id === activeTicker);
+          if (t) {
+            fetchTickerData(t.id).then(data => {
+              if (!data.error || data.error !== 'Ticker removed') {
+                t.data = data;
+                renderTickerBody(t);
+              }
+            });
+          }
+        }
+      });
+
+      // ============ TICKER MANAGEMENT ============
+      function addTicker() {
+        const tickerInput = document.getElementById('input-ticker');
+        const levelInput = document.getElementById('input-level');
+        
+        const ticker = tickerInput.value.trim().toUpperCase();
+        const level = parseFloat(levelInput.value.replace('$', ''));
+        
+        if (!ticker) {
+          alert('Enter a ticker symbol');
+          return;
+        }
+        if (isNaN(level) || level <= 0) {
+          alert('Enter a valid support level price');
+          return;
+        }
+        
+        // Check if this ticker already exists - if so, add level to existing ticker
+        const existingTicker = tickers.find(t => t.ticker === ticker);
+        if (existingTicker) {
+          // Check if this level already exists
+          if (existingTicker.levels.find(l => l.price === level)) {
+            alert('This level already exists for ' + ticker);
+            return;
+          }
+          // Add new level to existing ticker
+          existingTicker.levels.push({price: level, active: false});
+          renderTickerBody(existingTicker);
+          return;
+        }
+        
+        const now = Date.now();
+        // Generate unique ID for this ticker instance
+        const id = `${ticker}_${Date.now()}`;
+        const newTicker = { 
+          id,
+          ticker, 
+          levels: [{price: level, active: true}],  // Array of levels, first one is active
+          activeLevel: level,  // Currently selected level for analysis
+          data: null,
+          startMs: now - 5 * 60 * 1000, // Default: last 5 min
+          endMs: now
+        };
+        tickers.push(newTicker);
+        tickerInput.value = '';
+        levelInput.value = '';
+        
+        // Make this the active ticker
+        activeTicker = id;
+        
+        renderCards();
+        updateEmptyState();
+        updateSliderUI();
+        
+        // Only fetch data for the new ticker (don't refresh all)
+        fetchTickerData(newTicker.id).then(data => {
+          if (!data.error || data.error !== 'Ticker removed') {
+            newTicker.data = data;
+            renderTickerBody(newTicker);
+          }
+        });
+      }
+
+      function removeTicker(id) {
+        const idx = tickers.findIndex(t => t.id === id);
+        if (idx >= 0) {
+          if (activeTicker === id) activeTicker = null;
+          tickers.splice(idx, 1);
+          const card = document.getElementById('card-' + id);
+          if (card) card.remove();
+          updateEmptyState();
+          updateSliderUI();
+        }
+      }
+
+      function toggleMaximize(id) {
+        const card = document.getElementById('card-' + id);
+        if (!card) return;
+        
+        const wasMaximized = card.classList.contains('maximized');
+        
+        // First, un-maximize all cards
+        document.querySelectorAll('.ticker-card.maximized').forEach(c => {
+          c.classList.remove('maximized');
+          const btn = c.querySelector('.maximize-btn');
+          if (btn) btn.textContent = '⤢';
+        });
+        
+        // If this card wasn't maximized, maximize it now
+        if (!wasMaximized) {
+          card.classList.add('maximized');
+          const btn = card.querySelector('.maximize-btn');
+          if (btn) btn.textContent = '⤡';
+        }
+      }
+
+      function updateEmptyState() {
+        document.getElementById('empty-state').style.display = tickers.length === 0 ? 'block' : 'none';
+      }
+
+      function renderCards() {
+        const container = document.getElementById('ticker-cards');
+        
+        // Only add cards that don't exist yet
+        for (const t of tickers) {
+          if (document.getElementById('card-' + t.id)) continue; // Already exists
+          
+          const card = document.createElement('div');
+          card.className = 'ticker-card';
+          card.id = 'card-' + t.id;
+          const levelsStr = t.levels.map(l => l.active ? `<b>$${l.price.toFixed(4)}</b>` : `$${l.price.toFixed(4)}`).join(', ');
+          card.innerHTML = `
+            <div class="ticker-card-header" onclick="selectTicker('${t.id}')" style="cursor: pointer;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="ticker-name">${t.ticker}</span>
+                <span class="ticker-level" id="levels-${t.id}">@ ${levelsStr}</span>
+                <button class="add-level-btn" onclick="event.stopPropagation(); addLevelToTicker('${t.id}')" title="Add another level">+</button>
+                <span class="ema-indicator" id="ema-${t.id}" title="EMA/MACD Setup">⚪</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                <button class="maximize-btn" onclick="event.stopPropagation(); toggleMaximize('${t.id}')" title="Maximize/Restore">⤢</button>
+                <button class="remove-btn" onclick="event.stopPropagation(); removeTicker('${t.id}')">✕</button>
+              </div>
+            </div>
+            <div class="ticker-card-body" id="body-${t.id}">
+              <div class="ticker-loading">⏳ Loading...</div>
+            </div>
+          `;
+          container.appendChild(card);
+        }
+        
+        // Remove cards for tickers that no longer exist
+        const existingCards = container.querySelectorAll('.ticker-card');
+        existingCards.forEach(card => {
+          const cardId = card.id.replace('card-', '');
+          if (!tickers.find(t => t.id === cardId)) {
+            card.remove();
+          }
+        });
+        
+        // Update active state styling
+        updateActiveCardStyle();
+      }
+      
+      function selectTicker(id) {
+        activeTicker = id;
+        updateSliderUI();
+        updateActiveCardStyle();
+      }
+      
+      function addLevelToTicker(tickerId) {
+        const t = tickers.find(x => x.id === tickerId);
+        if (!t) return;
+        
+        const newPrice = prompt(`Add support level for ${t.ticker}:`, '');
+        if (!newPrice) return;
+        
+        const price = parseFloat(newPrice.replace('$', ''));
+        if (isNaN(price) || price <= 0) {
+          alert('Invalid price');
+          return;
+        }
+        
+        // Check if level already exists
+        if (t.levels.find(l => l.price === price)) {
+          alert('This level already exists');
+          return;
+        }
+        
+        // Add new level
+        t.levels.push({price: price, active: false});
+        
+        // Update display
+        const levelsEl = document.getElementById('levels-' + t.id);
+        if (levelsEl) {
+          const levelsStr = t.levels.map(l => 
+            l.active ? `<b>$${l.price.toFixed(4)}</b>` : `$${l.price.toFixed(4)}`
+          ).join(', ');
+          levelsEl.innerHTML = `@ ${levelsStr}`;
+        }
+        
+        // Re-render to show new level line
+        renderTickerBody(t);
+      }
+      
+      function switchLevel(tickerId, newLevel) {
+        const t = tickers.find(x => x.id === tickerId);
+        if (!t) return;
+        
+        // Update active level
+        t.activeLevel = newLevel;
+        t.levels.forEach(l => l.active = (l.price === newLevel));
+        
+        // Refresh data for this ticker with new level
+        fetchTickerData(t.id).then(data => {
+          if (!data.error || data.error !== 'Ticker removed') {
+            t.data = data;
+            renderTickerBody(t);
+          }
+        });
+        
+        // Update levels display in header
+        const levelsEl = document.getElementById('levels-' + t.id);
+        if (levelsEl) {
+          const levelsStr = t.levels.map(l => 
+            l.active ? `<b>$${l.price.toFixed(4)}</b>` : `$${l.price.toFixed(4)}`
+          ).join(', ');
+          levelsEl.innerHTML = `@ ${levelsStr}`;
+        }
+      }
+      
+      function updateActiveCardStyle() {
+        document.querySelectorAll('.ticker-card').forEach(card => {
+          const tickerName = card.id.replace('card-', '');
+          if (tickerName === activeTicker) {
+            card.style.border = '2px solid #3b82f6';
+            card.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.2)';
+          } else {
+            card.style.border = '1px solid #e2e8f0';
+            card.style.boxShadow = 'none';
+          }
+        });
+      }
+
+      // ============ DATA FETCHING ============
+      // Track which tickers are currently being fetched to prevent race conditions
+      const fetchingTickers = {};
+      
+      async function fetchTickerData(tickerId) {
+        // Prevent overlapping requests for same ticker
+        if (fetchingTickers[tickerId]) {
+          console.log(`[${tickerId}] Skipping - already fetching`);
+          return { error: 'Already fetching' };
+        }
+        
+        // Get this ticker by ID
+        const t = tickers.find(x => x.id === tickerId);
+        if (!t) return { error: 'Ticker not found' };
+        
+        fetchingTickers[tickerId] = true;
+        
+        const params = new URLSearchParams({
+          ticker: t.ticker,
+          level: t.activeLevel,
+          start_ms: Math.round(t.startMs),
+          end_ms: Math.round(t.endMs)
+        });
+        
+        try {
+          // Use FAST endpoint - no file I/O, much faster!
+          const resp = await fetch('/api/live/fast?' + params.toString());
+          if (!resp.ok) throw new Error('Failed to fetch');
+          
+          // Verify ticker still exists before returning
+          if (!tickers.find(x => x.id === tickerId)) {
+            console.log('Ticker removed during fetch:', tickerId);
+            return { error: 'Ticker removed' };
+          }
+          
+          return await resp.json();
+        } catch (e) {
+          console.error('Fetch error for', tickerId, e);
+          return { error: e.message };
+        } finally {
+          // Always clear the fetching flag
+          delete fetchingTickers[tickerId];
+        }
+      }
+
+      async function refreshAll() {
+        // Real-time end time (no snapping): reduces perceived lag vs 30s boundaries
+        const now = Date.now();
+        
+        // Update day boundary (rolling 24-hour window)
+        dayEndMs = now;
+        dayStartMs = dayEndMs - 24 * 60 * 60 * 1000;
+        
+        // For each ticker, auto-advance end time to current time
+        // if it's at or behind current time (so it catches up to live)
+        for (const t of tickers) {
+          if (t.endMs <= now) {
+            t.endMs = now;
+          }
+        }
+        
+        updateSliderUI();
+        
+        // Fetch tickers sequentially to reduce server load and prevent race conditions
+        for (const t of tickers) {
+          // Skip if this ticker is already being fetched
+          if (fetchingTickers[t.id]) {
+            console.log(`[refreshAll] Skipping ${t.id} - already fetching`);
+            continue;
+          }
+          
+          const data = await fetchTickerData(t.id);
+          // Only update if ticker still exists and fetch succeeded
+          const stillExists = tickers.find(x => x.id === t.id);
+          if (stillExists && data && !data.error) {
+            t.data = data;
+            renderTickerBody(t);
+          } else if (stillExists && data && data.error && data.error !== 'Already fetching' && data.error !== 'Ticker removed') {
+            // Show error but keep old data visible
+            console.warn(`[${t.id}] Error:`, data.error);
+          }
+        }
+      }
+
+      function renderTickerBody(t) {
+        const body = document.getElementById('body-' + t.id);
+        if (!body) return;
+        
+        if (t.data && t.data.error) {
+          body.innerHTML = `<div class="ticker-loading">❌ ${t.data.error}</div>`;
+          return;
+        }
+        
+        if (!t.data || !t.data.level_data) {
+          body.innerHTML = `<div class="ticker-loading">⏳ Waiting for data...</div>`;
+          return;
+        }
+        
+        // Update EMA/MACD indicator
+        const emaIndicator = document.getElementById('ema-' + t.id);
+        if (emaIndicator && t.data.ema_macd) {
+          const em = t.data.ema_macd;
+          const count = em.setup_count || 0;
+          const s1 = em.setup_1s || {};
+          const s30 = em.setup_30s || {};
+          
+          let indicator = '⚪';
+          let title = 'No EMA/MACD setup';
+          
+          if (count >= 2) {
+            indicator = '🟢🟢';
+            title = `BOTH setups ON!\n1s: EMA9>${s1.ema9?.toFixed(2)} MACD=${s1.macd?.toFixed(4)}\n30s: EMA9>${s30.ema9?.toFixed(2)} MACD=${s30.macd?.toFixed(4)}`;
+          } else if (count === 1) {
+            indicator = '🟢';
+            const which = s1.setup_on ? '1s' : '30s';
+            const data = s1.setup_on ? s1 : s30;
+            title = `${which} setup ON\nEMA9=${data.ema9?.toFixed(2)} EMA20=${data.ema20?.toFixed(2)} EMA30=${data.ema30?.toFixed(2)}\nMACD=${data.macd?.toFixed(4)} Signal=${data.signal?.toFixed(4)}`;
+          }
+          
+          emaIndicator.textContent = indicator;
+          emaIndicator.title = title;
+        }
+        
+        const lv = t.data.level_data;
+        const ms = lv.market_state || {};
+        const ds = lv.defense_score || {};
+        const as_ = lv.aggression_score || {};
+        const dp = lv.distribution_pattern || {};
+        const segs = lv.zone_segments || [];
+        const supportPrice = t.activeLevel;
+        
+        // Y-axis scaled to fit ALL levels with room for price movement
+        // 2% above highest level, 3% below lowest level
+        const allLevelPrices = t.levels.map(l => l.price);
+        const minLevel = Math.min(...allLevelPrices);
+        const maxLevel = Math.max(...allLevelPrices);
+        const chartMinPrice = minLevel * 0.97;  // 3% below lowest level
+        const chartMaxPrice = maxLevel * 1.02;  // 2% above highest level
+        const priceRange = chartMaxPrice - chartMinPrice;
+        
+        // For zone analysis, use the active level's bounds
+        const aboveCeil = lv.zone_analysis?.above_ceiling || supportPrice * 1.02;
+        const belowFloor = lv.zone_analysis?.below_floor || supportPrice * 0.97;
+
+        // Get volume range for sizing
+        let minV = Infinity, maxV = 0;
+        segs.forEach(s => {
+          const v = s.total_vol || 0;
+          if (v > 0) {
+            minV = Math.min(minV, v);
+            maxV = Math.max(maxV, v);
+          }
+        });
+        if (minV === Infinity) minV = 0;
+
+        // State classes
+        const stateClass = (ms.state || 'unknown').toLowerCase().replace(/_/g, '-');
+        const actionClass = (ms.action || 'wait').toLowerCase();
+
+        // State icons
+        const stateIcons = {
+          'BREAKDOWN_RISK': '🔴', 'WEAK_DEFENSE': '🟠', 'DEFENSE_ONLY': '🟡',
+          'DEFENSE_ACCUMULATING': '🔵', 'ACCUMULATION_SETUP': '💎', 'RECLAIM_DEVELOPING': '🟢',
+          'ACCEPTANCE': '💚', 'ACCEPTANCE_CAUTIOUS': '🟢', 'BREAK_LIKELY': '🚀',
+          'BREAK_LIKELY_CAUTIOUS': '🚀', 'DISTRIBUTION': '⚠️'
+        };
+        const actionIcons = {
+          'WAIT': '⏸️', 'WATCH': '👁️', 'STARTER': '🟢', 'ADD': '➕', 'AVOID': '🚫', 'SCALP': '⚡'
+        };
+
+        let html = '';
+
+        // State Panel
+        if (ms.state) {
+          const dsPct = ds.pct || 0;
+          const asPct = as_.pct || 0;
+          const dsClass = dsPct >= 65 ? 'high' : dsPct >= 40 ? 'medium' : 'low';
+          const asClass = asPct >= 65 ? 'high' : asPct >= 40 ? 'medium' : 'low';
+
+          html += `
+            <div class="state-panel">
+              <div class="state-header">
+                <div>
+                  <span class="state-badge ${stateClass}">
+                    ${stateIcons[ms.state] || '⚪'} ${ms.state.replace(/_/g, ' ')}
+                  </span>
+                </div>
+                <div>
+                  <span class="action-badge ${actionClass}">
+                    ${actionIcons[ms.action] || ''} ${ms.action}
+                  </span>
+                  <span style="margin-left: 8px; font-size: 12px; color: #6b7280;">(${ms.confidence || 0}% conf)</span>
+                </div>
+              </div>
+              <div class="state-meters">
+                <div class="meter-container">
+                  <div class="meter-label"><span>🛡️ Defense Score (DS)</span><span>${dsPct}%</span></div>
+                  <div class="meter-bar"><div class="meter-fill ${dsClass}" style="width: ${dsPct}%;"></div></div>
+                </div>
+                <div class="meter-container">
+                  <div class="meter-label"><span>⚔️ Aggression Score (AS)</span><span>${asPct}%</span></div>
+                  <div class="meter-bar"><div class="meter-fill ${asClass}" style="width: ${asPct}%;"></div></div>
+                </div>
+              </div>
+              <div class="state-reason"><strong>📊 Analysis:</strong> ${ms.reason || 'N/A'}</div>
+              <div class="state-flags">
+                ${ds.accumulation_detected ? `<span class="state-flag success">💎 Accumulation (${ds.accumulation_count || 0} dip-buys)</span>` : ''}
+                ${lv.late_momentum?.direction?.includes('BULLISH') ? `<span class="state-flag success">🚀 Late: ${lv.late_momentum.direction} (+${lv.late_momentum.score})</span>` : ''}
+                ${lv.late_momentum?.direction?.includes('BEARISH') ? `<span class="state-flag danger">📉 Late: ${lv.late_momentum.direction} (${lv.late_momentum.score})</span>` : ''}
+                ${ms.late_momentum?.upgrade ? `<span class="state-flag success">⬆️ Upgraded by late momentum</span>` : ''}
+                ${ms.late_momentum?.downgrade ? `<span class="state-flag warning">⬇️ Downgraded by late momentum</span>` : ''}
+                ${dp.triggered ? `<span class="state-flag ${dp.severity === 'HIGH' ? 'danger' : 'warning'}">⚠️ Distribution (${dp.severity})</span>` : ''}
+                ${(ds.reasons || []).slice(0, 3).map(r => {
+                  const cls = (r.includes('positive') || r.includes('buying') || r.includes('accumulating') || r.includes('SOAK')) ? 'success' : 
+                              (r.includes('selling') || r.includes('negative')) ? 'warning' : 'info';
+                  return `<span class="state-flag ${cls}">${r}</span>`;
+                }).join('')}
+                ${(as_.reasons || []).slice(0, 3).map(r => {
+                  const cls = (r.includes('positive') || r.includes('buying') || r.includes('growing') || r.includes('pressing')) ? 'success' : 
+                              (r.includes('selling') || r.includes('fading')) ? 'warning' : 'info';
+                  return `<span class="state-flag ${cls}">${r}</span>`;
+                }).join('')}
+              </div>
+            </div>
+          `;
+        }
+
+        // Zone Chart with dynamic Y-axis for multiple levels
+        if (segs.length > 0) {
+          // Generate level lines HTML - clamp to visible range but still show
+          const levelLinesHtml = t.levels.map(lvl => {
+            let yPct = 100 - ((lvl.price - chartMinPrice) / priceRange * 100);
+            const isActive = lvl.price === t.activeLevel;
+            const isOutOfRange = yPct < 0 || yPct > 100;
+            // Clamp to visible range
+            yPct = Math.max(0, Math.min(100, yPct));
+            const lineColor = isActive ? '#f97316' : (isOutOfRange ? '#6366f1' : '#94a3b8');
+            const lineStyle = isActive ? '3px solid' : '2px dashed';
+            const outOfRangeIndicator = isOutOfRange ? ' ↕' : '';
+            return `
+              <div class="zone-chart-level-line" 
+                   style="position: absolute; left: 0; right: 0; top: ${yPct}%; height: 0; border-top: ${lineStyle} ${lineColor}; cursor: pointer; z-index: 10;"
+                   onclick="event.stopPropagation(); switchLevel('${t.id}', ${lvl.price})"
+                   title="Click to analyze $${lvl.price.toFixed(4)}${isOutOfRange ? ' (outside visible range)' : ''}">
+                <span style="position: absolute; right: 5px; top: -12px; font-size: 11px; font-weight: bold; color: ${lineColor}; background: white; padding: 2px 6px; border-radius: 3px; border: 1px solid ${lineColor};">$${lvl.price.toFixed(4)}${outOfRangeIndicator}</span>
+              </div>
+            `;
+          }).join('');
+          
+          html += `
+            <div class="zone-chart">
+              <div class="zone-chart-container">
+                <div class="zone-chart-labels">
+                  <div class="zone-chart-label above">TOP<br><small>$${chartMaxPrice.toFixed(2)}</small></div>
+                  <div class="zone-chart-label on">ACTIVE<br><small>$${supportPrice.toFixed(2)}</small></div>
+                  <div class="zone-chart-label below">BOTTOM<br><small>$${chartMinPrice.toFixed(2)}</small></div>
+                </div>
+                <div class="zone-chart-area">
+                  <div class="zone-chart-inner" style="position: relative;">
+                    <div class="zone-chart-grid">
+                      ${levelLinesHtml}
+                    </div>
+                    <div class="zone-chart-dots">
+          `;
+
+          for (const seg of segs) {
+            const total = seg.total_vol || 0;
+            const delta = seg.delta || 0;
+            const instBuy = seg.inst_buy || 0;
+            const instSell = seg.inst_sell || 0;
+            const zone = seg.zone || 'ON';
+            // Use display_price (Winner's Price) for positioning, fall back to end_price
+            const displayPrice = seg.display_price || seg.end_price || supportPrice;
+
+            // Determine overall winner and INST activity
+            const buyersWon = delta > 0 && total > 0 && (delta / total) > 0.05;
+            const sellersWon = delta < 0 && total > 0 && ((-delta) / total) > 0.05;
+            
+            const instBuySignificant = instBuy > 5000;
+            const instSellSignificant = instSell > 5000;
+            const instBuyDominant = instBuy > instSell * 1.3 && instBuySignificant;
+            const instSellDominant = instSell > instBuy * 1.3 && instSellSignificant;
+            
+            // 6-state classification
+            let cls = 'neutral';
+            let isConflict = false;
+            
+            if (buyersWon) {
+              if (instSellDominant) {
+                // Conflict: buyers won but INST was selling
+                cls = 'buy';
+                isConflict = true;
+              } else if (instBuyDominant) {
+                // Aligned: INST buyers dominated + overall buyers won = Blue
+                cls = 'inst-buy';
+              } else {
+                // Retail buyers won
+                cls = 'buy';
+              }
+            } else if (sellersWon) {
+              if (instBuyDominant) {
+                // Conflict: sellers won but INST was buying (ABSORPTION!)
+                cls = 'sell';
+                isConflict = true;
+              } else if (instSellDominant) {
+                // Aligned: INST sellers dominated + overall sellers won = Pink
+                cls = 'inst-sell';
+              } else {
+                // Retail sellers won
+                cls = 'sell';
+              }
+            }
+            
+            // Add conflict class for rectangle shape
+            const conflictCls = isConflict ? 'conflict' : '';
+
+            // Size
+            let size = 12;
+            if (maxV > minV) size = 12 + ((total - minV) / (maxV - minV)) * 16;
+
+            // Y position based on actual price within dynamic chart range
+            // Clamp price to chart bounds
+            const clampedPrice = Math.max(chartMinPrice, Math.min(chartMaxPrice, displayPrice));
+            // Calculate Y percentage (inverted: higher price = lower Y)
+            let yPct = 100 - ((clampedPrice - chartMinPrice) / priceRange * 100);
+            // Clamp to 2-98% to keep dots visible
+            yPct = Math.max(2, Math.min(98, yPct));
+
+            const time = seg.start_ts_ms ? new Date(seg.start_ts_ms).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '';
+            const title = `${time} | ${zone} | $${displayPrice.toFixed(4)} | delta=${delta >= 0 ? '+' : ''}${delta.toLocaleString()} | buy=${(seg.buy_vol || 0).toLocaleString()} | sell=${(seg.sell_vol || 0).toLocaleString()} | inst=${instBuy.toLocaleString()}B/${instSell.toLocaleString()}S`;
+
+            html += `
+              <div class="zone-dot-col">
+                <div class="zone-dot-item ${cls} ${conflictCls}" title="${title}" 
+                     style="width: ${size.toFixed(0)}px; height: ${size.toFixed(0)}px; top: ${yPct.toFixed(1)}%;"></div>
+              </div>
+            `;
+          }
+
+          html += `
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="zone-chart-legend">
+                <span><span class="legend-dot" style="background:#22c55e;"></span> Buyers</span>
+                <span><span class="legend-dot" style="background:#ef4444;"></span> Sellers</span>
+                <span><span class="legend-dot" style="background:#d1d5db;"></span> Even</span>
+                <span><span class="legend-dot" style="background:#3b82f6;"></span> INST Buy+Win</span>
+                <span><span class="legend-dot" style="background:#ec4899;"></span> INST Sell+Win</span>
+                <span><span class="legend-dot" style="background:#22c55e; border-radius:3px;"></span> Conflict</span>
+                <span>⬤ Size = volume</span>
+              </div>
+            </div>
+          `;
+        } else {
+          html += `<div class="zone-chart" style="text-align: center; padding: 40px; color: #6b7280;">⏳ No data in range</div>`;
+        }
+
+        body.innerHTML = html;
+        
+        // Scroll dot chart to show latest (right side)
+        const chartArea = body.querySelector('.zone-chart-area');
+        if (chartArea) {
+          chartArea.scrollLeft = chartArea.scrollWidth;
+        }
+      }
+
+      // ============ WAKE-UP DETECTOR ============
+      let lastActiveTime = Date.now();
+      
+      // Update last active time every second
+      setInterval(() => {
+        lastActiveTime = Date.now();
+      }, 1000);
+      
+      // Detect when page becomes visible after sleep
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          const now = Date.now();
+          const timeSinceLast = now - lastActiveTime;
+          
+          // If more than 60 seconds passed, PC was likely asleep
+          if (timeSinceLast > 60000) {
+            console.log(`[WAKE] PC woke up after ${Math.round(timeSinceLast/1000)}s - resetting live data`);
+            
+            // Reset all tickers to current time
+            for (const t of tickers) {
+              // Keep the same duration, just shift to current time
+              const duration = t.endMs - t.startMs;
+              t.endMs = now;
+              t.startMs = now - duration;
+            }
+            
+            // Update slider and force immediate refresh
+            updateSliderUI();
+            refreshAll();
+            
+            console.log('[WAKE] Live data reset complete');
+          }
+          
+          lastActiveTime = now;
+        }
+      });
+
+      // ============ INIT ============
+      function init() {
+        updateSliderUI();
+        updateEmptyState();
+        
+        // Start auto-refresh every 10 seconds (fetch is sequential to reduce load)
+        refreshInterval = setInterval(refreshAll, 10000);
+
+        // Allow Enter key to add ticker
+        document.getElementById('input-ticker').addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') document.getElementById('input-level').focus();
+        });
+        document.getElementById('input-level').addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') addTicker();
+        });
+      }
+
+      init();
+    </script>
+  </body>
+</html>
+

@@ -89,6 +89,7 @@
         }
         .badge.pending { background: rgba(210, 153, 34, 0.2); color: var(--warning); }
         .badge.running { background: rgba(88, 166, 255, 0.2); color: var(--accent); animation: pulse 1.5s infinite; }
+        .badge.live { background: rgba(220, 38, 38, 0.3); color: #ef4444; animation: pulse 1s infinite; }
         .badge.done { background: rgba(63, 185, 80, 0.2); color: var(--success); }
         .badge.error { background: rgba(248, 81, 73, 0.2); color: var(--error); }
         @keyframes pulse {
@@ -205,19 +206,21 @@
         }
 
         function getSessionLink(job) {
-            if (job.status !== 'done') return '';
+            if (!job.start_ms) return '';
             const startDate = new Date(job.start_ms);
             const dateStr = startDate.toISOString().split('T')[0];
             return `/sessions/${dateStr}/${job.ticker}/${job.session_id}`;
         }
 
         function renderJob(job) {
-            const progressHtml = job.status === 'running' || job.status === 'done' ? `
+            const showProgress = job.status === 'running' || job.status === 'done' || job.status === 'live';
+            const progressHtml = showProgress ? `
                 <div class="job-progress">
                     <div class="step">${job.current_step || 'Starting...'}</div>
                     <div class="stats">
                         Trades: ${formatNumber(job.trade_count)} · Quotes: ${formatNumber(job.quote_count)}
                         ${job.marker_count ? ` · Markers: ${job.marker_count}` : ''}
+                        ${job.is_live ? ` · 🔴 LIVE` : ''}
                     </div>
                     ${(job.first_price || job.last_price) ? `
                         <div class="price-preview">
@@ -227,11 +230,14 @@
                 </div>
             ` : '';
 
-            const actionsHtml = job.status === 'done' 
-                ? `<a href="${getSessionLink(job)}" class="session-link">View Results →</a>`
-                : job.status === 'error'
-                    ? `<div class="error-msg">${(job.error_message || '').substring(0, 300)}</div>`
-                    : '';
+            let actionsHtml = '';
+            if (job.status === 'done') {
+                actionsHtml = `<a href="${getSessionLink(job)}" class="session-link">View Results →</a>`;
+            } else if (job.status === 'live') {
+                actionsHtml = `<a href="${getSessionLink(job)}/live" class="session-link" style="color: #ef4444;">🔴 View Live →</a>`;
+            } else if (job.status === 'error') {
+                actionsHtml = `<div class="error-msg">${(job.error_message || '').substring(0, 300)}</div>`;
+            }
 
             return `
                 <div class="job-card" data-job-id="${job.job_id}">
@@ -267,16 +273,23 @@
                 }
 
                 const pending = jobs.filter(j => j.status === 'pending' || j.status === 'running').length;
+                const live = jobs.filter(j => j.status === 'live').length;
                 const done = jobs.filter(j => j.status === 'done').length;
                 const errors = jobs.filter(j => j.status === 'error').length;
 
-                statusInfo.textContent = `${pending} running · ${done} done · ${errors} errors`;
+                let statusText = `${pending} running · ${done} done · ${errors} errors`;
+                if (live > 0) {
+                    statusText = `🔴 ${live} LIVE · ${pending} running · ${done} done · ${errors} errors`;
+                }
+                statusInfo.textContent = statusText;
 
                 container.innerHTML = jobs.map(renderJob).join('');
 
-                // Stop polling if all jobs are terminal
-                if (pending === 0 && jobs.length > 0) {
+                // Stop polling if all jobs are terminal (but keep going for live jobs)
+                if (pending === 0 && live === 0 && jobs.length > 0) {
                     document.getElementById('refresh-status').textContent = 'Auto-refresh: OFF (all done)';
+                } else if (live > 0) {
+                    document.getElementById('refresh-status').textContent = '🔴 Auto-refresh: ON (LIVE)';
                     if (pollTimer) {
                         clearInterval(pollTimer);
                         pollTimer = null;

@@ -37,7 +37,7 @@ class Job:
     job_id: str
     ticker: str
     session_id: str
-    status: str  # pending | running | done | error
+    status: str  # pending | running | done | error | live
     created_at: int  # ms since epoch
     started_at: Optional[int] = None
     finished_at: Optional[int] = None
@@ -48,6 +48,10 @@ class Job:
     end_ms: Optional[int] = None
     direction_bias: str = "long"
     markers: list[MarkerInput] = field(default_factory=list)
+    
+    # Live mode
+    is_live: bool = False
+    last_update_ms: Optional[int] = None  # Last time we fetched live data
 
     # Progress tracking
     current_step: str = ""
@@ -77,6 +81,8 @@ class Job:
             "quote_count": self.quote_count,
             "first_price": self.first_price,
             "last_price": self.last_price,
+            "is_live": self.is_live,
+            "last_update_ms": self.last_update_ms,
         }
 
 
@@ -105,19 +111,26 @@ class JobManager:
         *,
         tickers: list[str],
         start_ms: int,
-        end_ms: int,
+        end_ms: Optional[int],  # None = live mode
         direction_bias: str,
         markers: list[MarkerInput],
         session_id_override: Optional[str] = None,
+        is_live: bool = False,
     ) -> list[str]:
         """Create jobs for each ticker and start execution in background.
         
         Args:
             session_id_override: If provided, use this session_id instead of auto-generating.
                                Only valid when len(tickers) == 1.
+            is_live: If True, run in live mode (keep updating every 10s).
         """
         job_ids: list[str] = []
         now_ms = int(time.time() * 1000)
+        
+        # Auto-detect live mode if end_ms is None or 0
+        if end_ms is None or end_ms == 0:
+            is_live = True
+            end_ms = now_ms  # Start with current time, will update in loop
 
         for ticker in tickers:
             job_id = str(uuid.uuid4())
@@ -125,7 +138,10 @@ class JobManager:
                 session_id = session_id_override
             else:
                 # Generate base session_id from start time
+                # For live mode, add "_LIVE" suffix
                 base_session_id = f"{ticker}_{datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+                if is_live:
+                    base_session_id += "_LIVE"
                 session_id = base_session_id
                 
                 # Check for existing sessions with same ID and add suffix if needed
@@ -153,12 +169,16 @@ class JobManager:
                 end_ms=end_ms,
                 direction_bias=direction_bias,
                 markers=markers.copy(),
+                is_live=is_live,
             )
             self._jobs[job_id] = job
             job_ids.append(job_id)
 
             # Start job in background
-            asyncio.create_task(self._run_job(job))
+            if is_live:
+                asyncio.create_task(self._run_live_job(job))
+            else:
+                asyncio.create_task(self._run_job(job))
 
         return job_ids
 
@@ -333,3 +353,177 @@ class JobManager:
             job.finished_at = int(time.time() * 1000)
             job.error_message = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
             job.current_step = f"Error: {type(e).__name__}"
+
+    async def _run_live_job(self, job: Job) -> None:
+        """Execute a live job: keeps updating every 10s until stopped."""
+        import pandas as pd
+        import csv
+        
+        async with self._lock:
+            job.status = "live"
+            job.started_at = int(time.time() * 1000)
+
+        update_interval_s = 10  # Update every 10 seconds
+        
+        try:
+            out_dir = Path(
+                self._config.storage.root_dir
+            ) / "replay" / f"{job.ticker}_{job.session_id}"
+            
+            # Build commands CSV once (markers don't change in live mode)
+            commands_csv_path: Optional[Path] = None
+            if job.markers:
+                self._update_step(job, f"Writing {len(job.markers)} marker(s) + levels...")
+                commands_csv_path = out_dir / "commands.csv"
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                header = [
+                    "ts_ms", "ticker", "type", "marker_type", "marker_id",
+                    "direction_bias", "notes", "level_price", "level_type",
+                    "level_width_atr", "level_id",
+                ]
+
+                def _marker_note(marker: MarkerInput) -> str:
+                    payload: dict[str, Any] = {
+                        "end_ts_ms": marker.end_ts_ms,
+                        "price_tags": marker.price_tags,
+                    }
+                    if marker.notes:
+                        for k, v in marker.notes.items():
+                            payload[k] = v
+                    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+                with open(commands_csv_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=header)
+                    writer.writeheader()
+                    for marker in job.markers:
+                        for tag in marker.price_tags:
+                            price = float(tag["price"])
+                            kind = tag.get("kind") or "manual"
+                            level_type = str(kind)
+                            level_id = f"marker_level:{job.ticker}:{marker.start_ts_ms}:{price}:{level_type}"
+                            writer.writerow({
+                                "ts_ms": int(marker.start_ts_ms),
+                                "ticker": job.ticker,
+                                "type": "add_level",
+                                "marker_type": "",
+                                "marker_id": "",
+                                "direction_bias": "",
+                                "notes": f"from_marker:{marker.marker_type}",
+                                "level_price": price,
+                                "level_type": level_type,
+                                "level_width_atr": 0.25,
+                                "level_id": level_id,
+                            })
+                    for marker in job.markers:
+                        marker_id = f"marker:{job.ticker}:{marker.start_ts_ms}:{marker.marker_type}"
+                        skip_episode = bool((marker.notes or {}).get("skip_episode", False))
+                        writer.writerow({
+                            "ts_ms": int(marker.start_ts_ms),
+                            "ticker": job.ticker,
+                            "type": "add_marker",
+                            "marker_type": marker.marker_type,
+                            "marker_id": marker_id,
+                            "direction_bias": ("" if skip_episode else job.direction_bias),
+                            "notes": _marker_note(marker),
+                            "level_price": "",
+                            "level_type": "",
+                            "level_width_atr": "",
+                            "level_id": "",
+                        })
+            
+            # Live loop - keep updating until job is cancelled
+            update_count = 0
+            while job.status == "live":
+                update_count += 1
+                now_ms = int(time.time() * 1000)
+                job.end_ms = now_ms
+                job.last_update_ms = now_ms
+                
+                self._update_step(job, f"[LIVE #{update_count}] Fetching data up to NOW...")
+                
+                try:
+                    # Fetch latest data from Alpaca
+                    print(f"[LIVE] Fetching {job.ticker} from {job.start_ms} to {now_ms}...")
+                    trades_path, quotes_path = await export_alpaca_to_replay(
+                        config=self._config,
+                        ticker=job.ticker,
+                        start_ts_ms=job.start_ms or 0,
+                        end_ts_ms=now_ms,
+                        out_dir=out_dir,
+                    )
+                    print(f"[LIVE] Fetched to {trades_path}")
+                    
+                    # Update stats
+                    try:
+                        tdf = pd.read_parquet(trades_path)
+                        job.trade_count = len(tdf)
+                        print(f"[LIVE] Trade count: {job.trade_count}")
+                        if not tdf.empty and "price" in tdf.columns:
+                            job.first_price = float(tdf["price"].iloc[0])
+                            job.last_price = float(tdf["price"].iloc[-1])
+                    except Exception as e:
+                        print(f"[LIVE] Error reading trades: {e}")
+
+                    try:
+                        qdf = pd.read_parquet(quotes_path)
+                        job.quote_count = len(qdf)
+                        print(f"[LIVE] Quote count: {job.quote_count}")
+                    except Exception as e:
+                        print(f"[LIVE] Error reading quotes: {e}")
+                    
+                    self._update_step(job, f"[LIVE #{update_count}] {job.trade_count:,} trades, ${job.last_price:.2f}" if job.last_price else f"[LIVE #{update_count}] {job.trade_count:,} trades")
+                    
+                    # Run pipeline
+                    print(f"[LIVE] Running pipeline for {job.session_id}...")
+                    await run_replay_session(
+                        ticker=job.ticker,
+                        session_id=job.session_id,
+                        direction_bias=job.direction_bias,
+                        levels_yaml=None,
+                        trades_path=trades_path,
+                        quotes_path=quotes_path,
+                        commands_csv=commands_csv_path,
+                        config=self._config,
+                    )
+                    print(f"[LIVE] Pipeline complete!")
+                    
+                    # Clear cached report so it regenerates on next view
+                    try:
+                        root_dir = Path(self._config.storage.root_dir)
+                        date_str = datetime.fromtimestamp((job.start_ms or 0) / 1000, tz=timezone.utc).strftime('%Y-%m-%d')
+                        report_cache_path = root_dir / "reports" / f"date={date_str}" / f"ticker={job.ticker}" / f"session={job.session_id}" / "report.json"
+                        if report_cache_path.exists():
+                            report_cache_path.unlink()
+                            print(f"[LIVE] Cleared cached report")
+                    except Exception as e:
+                        print(f"[LIVE] Error clearing cache: {e}")
+                    
+                except Exception as e:
+                    # Log error but keep trying
+                    print(f"[LIVE] ERROR: {type(e).__name__}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self._update_step(job, f"[LIVE #{update_count}] Error: {type(e).__name__}: {str(e)[:50]}")
+                
+                # Wait for next update interval
+                await asyncio.sleep(update_interval_s)
+            
+            # Job was stopped
+            job.status = "done"
+            job.finished_at = int(time.time() * 1000)
+            job.current_step = "Live session ended"
+            
+        except Exception as e:
+            job.status = "error"
+            job.finished_at = int(time.time() * 1000)
+            job.error_message = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+            job.current_step = f"Error: {type(e).__name__}"
+    
+    def stop_live_job(self, job_id: str) -> bool:
+        """Stop a live job."""
+        job = self._jobs.get(job_id)
+        if job and job.status == "live":
+            job.status = "stopping"  # Will cause loop to exit
+            return True
+        return False
