@@ -1476,13 +1476,19 @@ def create_app(*, config: Optional[AppConfig] = None) -> FastAPI:
         return None
 
     def _result_payload(r: Any) -> dict[str, Any]:
+        import dataclasses
+
         if isinstance(r, dict):
             return dict(r)
-        d = dict(getattr(r, "__dict__", {}) or {})
-        sigs = d.get("signals") or []
-        if sigs and isinstance(sigs, list):
-            d["signals"] = [s.__dict__ if hasattr(s, "__dict__") else dict(s) for s in sigs]
-        return d
+        if dataclasses.is_dataclass(r):
+            # Dataclasses in this repo often use slots, so __dict__ may not exist.
+            return dataclasses.asdict(r)
+        if hasattr(r, "__dict__"):
+            return dict(getattr(r, "__dict__", {}) or {})
+        try:
+            return dict(r)
+        except Exception:
+            return {}
 
     def _movers_as_results(movers: list[dict[str, Any]]) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
